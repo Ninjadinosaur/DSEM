@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Two stacked screens, like a DS, inside the adaptive-icon safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:fillColor="#FFFFFF" android:pathData="M34,28h40a4,4 0,0 1,4 4v18a4,4 0,0 1,-4 4h-40a4,4 0,0 1,-4 -4v-18a4,4 0,0 1,4 -4z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M34,58h40a4,4 0,0 1,4 4v18a4,4 0,0 1,-4 4h-40a4,4 0,0 1,-4 -4v-18a4,4 0,0 1,4 -4z" />
+    <path android:fillColor="#1B1B1F" android:pathData="M37,32h34v18h-34z" />
+    <path android:fillColor="#1B1B1F" android:pathData="M37,62h34v18h-34z" />
+    <path android:fillColor="#E53935" android:pathData="M47,38h14v6h-14z" />
+</vector>
