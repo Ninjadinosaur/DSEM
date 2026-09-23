@@ -41,3 +41,14 @@ Our fixes are kept as patch files in `app/src/main/azahar/patches/`; the Gradle 
    a multi-byte value was reported as failed. And files opened for reading and appending ("a+")
    started at the end instead of the beginning. Together they made the shader cache delete
    itself on every launch, so every shader was recompiled (stutter) each session.
+3. `0003-gl-link-failure-cpu-fallback.patch` (OpenGL rasterizer and shader manager): if the driver
+   refuses to link a draw's program, that draw falls back to CPU vertex shading instead of silently
+   not drawing (characters showed as black silhouettes), and the broken program isn't cached.
+4. `0004-glsl-constant-bound-loops.patch`, `glsl_shader_decompiler.cpp`: PICA vertex-shader loops
+   are generated with a constant bound of 256 (the count is an 8-bit uniform) and an early break.
+   Adreno fails to link loops bounded by a uniform once the body is large (Pokemon X/Y skinning
+   shaders); verified on the 13R by compiling variants of the failing shader. With this, those
+   scenes run fully on the GPU: 4 slow frames in 20 s instead of 415.
+
+The host also disables Azahar's ARM64 shader JIT (used only for CPU vertex shading): it mirrored
+and garbled geometry in Pokemon X, while the interpreter rendered the same save state correctly.

@@ -1,0 +1,29 @@
+diff --git a/src/video_core/shader/generator/glsl_shader_decompiler.cpp b/src/video_core/shader/generator/glsl_shader_decompiler.cpp
+index 76ffe9b..94b053b 100644
+--- a/src/video_core/shader/generator/glsl_shader_decompiler.cpp
++++ b/src/video_core/shader/generator/glsl_shader_decompiler.cpp
+@@ -769,16 +769,21 @@ private:
+ 
+                 shader.AddLine("address_registers.z = int({}.y);", int_uniform);
+ 
++                // The iteration count (x + 1) comes from an 8-bit integer uniform, so the loop runs
++                // at most 256 times. Give it that constant bound and break on the real count:
++                // Adreno's GLSL compiler fails to link (without a log) loops whose bound is a
++                // uniform once the body is large, e.g. skinning shaders in Pokemon X/Y.
+                 const std::string loop_var = fmt::format("loop{}", offset);
+-                shader.AddLine(
+-                    "for (uint {} = 0u; {} <= {}.x; address_registers.z += int({}.z), ++{}) {{",
+-                    loop_var, loop_var, int_uniform, int_uniform, loop_var);
++                shader.AddLine("for (uint {} = 0u; {} < 256u; ++{}) {{", loop_var, loop_var,
++                               loop_var);
+                 ++shader.scope;
++                shader.AddLine("if ({} > {}.x) break;", loop_var, int_uniform);
+ 
+                 auto& loop_sub = GetSubroutine(offset + 1, instr.flow_control.dest_offset + 1);
+                 CallSubroutine(loop_sub);
+                 offset = instr.flow_control.dest_offset;
+ 
++                shader.AddLine("address_registers.z += int({}.z);", int_uniform);
+                 --shader.scope;
+                 shader.AddLine("}}");
+ 

@@ -393,6 +393,10 @@ std::string ThreeDsCore::OptionOverride(const std::string& key) const
     }
     if (key == "citra_is_new_3ds") return config.GetBool("3ds.new3ds", true) ? "New 3DS" : "Old 3DS";
     if (key == "citra_use_cpu_jit") return "enabled";
+    // CPU vertex shading (used only for draws the GPU driver can't link) must use the
+    // interpreter: Azahar's ARM64 shader JIT mirrors and garbles geometry in Pokemon X
+    // (verified on the 13R: same save state renders correctly with the interpreter).
+    if (key == "citra_use_shader_jit") return "disabled";
     // Touch arrives as absolute positions; the right stick is a real C-stick, not a mouse.
     if (key == "citra_enable_touch_touchscreen") return "enabled";
     if (key == "citra_enable_mouse_touchscreen") return "disabled";
