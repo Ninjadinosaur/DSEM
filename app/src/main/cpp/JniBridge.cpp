@@ -170,6 +170,25 @@ JNI_FN(void, nativeSetTouch)(JNIEnv*, jclass, jboolean down, jint x, jint y)
     S().SetTouch(down, x, y);
 }
 
+JNI_FN(void, nativeSetAnalog)(JNIEnv*, jclass, jint stick, jfloat x, jfloat y)
+{
+    S().SetAnalog(stick, x, y);
+}
+
+JNI_FN(void, nativeSetPointer)(JNIEnv*, jclass, jboolean down, jfloat x, jfloat y)
+{
+    S().SetPointer(down, x, y);
+}
+
+JNI_FN(jintArray, nativeGet3dsFrameSize)(JNIEnv* env, jclass)
+{
+    int size[2] = {0, 0};
+    if (!S().ThreeDsFrameSize(size[0], size[1])) return nullptr;
+    jintArray out = env->NewIntArray(2);
+    env->SetIntArrayRegion(out, 0, 2, size);
+    return out;
+}
+
 JNI_FN(void, nativeSetLidClosed)(JNIEnv*, jclass, jboolean closed)
 {
     S().SetLidClosed(closed);

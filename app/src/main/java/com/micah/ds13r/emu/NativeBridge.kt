@@ -34,6 +34,10 @@ object NativeBridge {
         const val L = 1 shl 9
         const val X = 1 shl 10
         const val Y = 1 shl 11
+        // 3DS only
+        const val ZL = 1 shl 12
+        const val ZR = 1 shl 13
+        const val HOME = 1 shl 14
     }
 
     object SpeedMode {
@@ -65,6 +69,12 @@ object NativeBridge {
 
     @JvmStatic external fun nativeSetKeys(pressedMask: Int)
     @JvmStatic external fun nativeSetTouch(down: Boolean, x: Int, y: Int)
+    /** 3DS: stick 0 = circle pad, 1 = C-stick; -1..1 with y pointing down. */
+    @JvmStatic external fun nativeSetAnalog(stick: Int, x: Float, y: Float)
+    /** 3DS: touch as a fraction (0..1) of the whole composed frame. */
+    @JvmStatic external fun nativeSetPointer(down: Boolean, x: Float, y: Float)
+    /** 3DS: [width, height] of the composed frame, or null when no 3DS game runs. */
+    @JvmStatic external fun nativeGet3dsFrameSize(): IntArray?
     @JvmStatic external fun nativeSetLidClosed(closed: Boolean)
     @JvmStatic external fun nativeSetBlow(active: Boolean)
     @JvmStatic external fun nativeSetMicAllowed(allowed: Boolean)

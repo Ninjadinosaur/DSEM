@@ -27,6 +27,10 @@ class ControllerOverlayView(context: Context, private val listener: Listener) : 
         fun onStylus(down: Boolean, x: Int, y: Int)
         fun onButton(id: ControlId, pressed: Boolean)
         fun onHaptic()
+        /** 3DS circle pad, -1..1 with y pointing down. */
+        fun onCirclePad(x: Float, y: Float) {}
+        /** 3DS touch, as a fraction of the composed frame. */
+        fun onPointer(down: Boolean, x: Float, y: Float) {}
     }
 
     var layout: LayoutResult? = null
@@ -54,6 +58,9 @@ class ControllerOverlayView(context: Context, private val listener: Listener) : 
             field = value
             rebuild()
         }
+    /** A 3DS game: touches on the image go to the engine as frame positions. */
+    var threeDs = false
+
     var hiddenIds: Set<ControlId> = emptySet()
         set(value) {
             field = value
@@ -85,6 +92,9 @@ class ControllerOverlayView(context: Context, private val listener: Listener) : 
     private val pointerControl = HashMap<Int, ControlId>()
     private val pointerDpad = HashMap<Int, Int>()
     private var stylusPointer = -1
+    private var circlePointer = -1
+    private var circleX = 0f
+    private var circleY = 0f
     private var keyMask = 0
     private val pressedButtons = HashSet<ControlId>()
 
@@ -123,6 +133,7 @@ class ControllerOverlayView(context: Context, private val listener: Listener) : 
             val pressed = id in pressedButtons || (id == ControlId.DPAD && pointerDpad.isNotEmpty())
             when (id) {
                 ControlId.DPAD -> drawDpad(canvas, r, alpha)
+                ControlId.CIRCLE_PAD -> drawCirclePad(canvas, r, alpha)
                 else -> drawButton(canvas, id, r, pressed, alpha)
             }
         }
@@ -173,6 +184,37 @@ class ControllerOverlayView(context: Context, private val listener: Listener) : 
         canvas.drawCircle(r.left + c, r.top + c, arm * 0.2f, stroke)
     }
 
+    private fun drawCirclePad(canvas: Canvas, r: RectF, alpha: Int) {
+        val radius = r.width() / 2
+        fill.color = Color.argb(alpha / 2, 40, 40, 40)
+        stroke.color = Color.argb(alpha, 230, 230, 230)
+        canvas.drawCircle(r.centerX(), r.centerY(), radius, fill)
+        canvas.drawCircle(r.centerX(), r.centerY(), radius, stroke)
+        // The knob follows the thumb, up to the rim.
+        val knob = radius * 0.45f
+        val kx = r.centerX() + circleX * (radius - knob)
+        val ky = r.centerY() + circleY * (radius - knob)
+        fill.color = if (circlePointer != -1) Color.argb(alpha, 255, 255, 255) else Color.argb(alpha, 120, 120, 120)
+        canvas.drawCircle(kx, ky, knob, fill)
+        canvas.drawCircle(kx, ky, knob, stroke)
+    }
+
+    /** Circle pad deflection for a thumb at (x, y): -1..1 per axis, limited to the unit circle. */
+    private fun updateCircle(x: Float, y: Float) {
+        val r = rects[ControlId.CIRCLE_PAD] ?: return
+        val radius = r.width() / 2 * 0.8f
+        var dx = (x - r.centerX()) / radius
+        var dy = (y - r.centerY()) / radius
+        val len = hypot(dx, dy)
+        if (len > 1f) {
+            dx /= len
+            dy /= len
+        }
+        circleX = dx
+        circleY = dy
+        listener.onCirclePad(dx, dy)
+    }
+
     private fun drawCursor(canvas: Canvas, pos: Pair<Int, Int>) {
         val l = layout ?: return
         val s = l.screens.lastOrNull { it.screen == 1 } ?: return
@@ -192,7 +234,7 @@ class ControllerOverlayView(context: Context, private val listener: Listener) : 
         var bestDist = Float.MAX_VALUE
         for ((id, r) in rects) {
             // Generous hit area: 30% larger than the drawn control.
-            val grow = if (id == ControlId.DPAD) r.width() * 0.15f else r.width() * 0.3f
+            val grow = if (id == ControlId.DPAD || id == ControlId.CIRCLE_PAD) r.width() * 0.15f else r.width() * 0.3f
             val hit = RectF(r.left - grow, r.top - grow, r.right + grow, r.bottom + grow)
             if (isWide(id)) hit.inset(-r.width() * 0.35f, 0f)
             if (hit.contains(x, y)) {
@@ -248,6 +290,14 @@ class ControllerOverlayView(context: Context, private val listener: Listener) : 
     private fun pointerDown(id: Int, x: Float, y: Float) {
         val control = hitControl(x, y)
         if (control != null) {
+            if (control == ControlId.CIRCLE_PAD) {
+                if (circlePointer == -1) {
+                    circlePointer = id
+                    updateCircle(x, y)
+                    listener.onHaptic()
+                }
+                return
+            }
             pointerControl[id] = control
             if (control == ControlId.DPAD) {
                 pointerDpad[id] = dpadDirections(rects[control]!!, x, y)
@@ -258,6 +308,13 @@ class ControllerOverlayView(context: Context, private val listener: Listener) : 
             return
         }
         // Not a control: maybe the bottom DS screen. Only one stylus at a time.
+        if (stylusPointer == -1 && threeDs) {
+            layout?.to3dsPointer(x, y)?.let { (u, v) ->
+                stylusPointer = id
+                listener.onPointer(true, u, v)
+            }
+            return
+        }
         if (stylusPointer == -1) {
             layout?.toDsTouch(x, y)?.let { (dx, dy) ->
                 stylusPointer = id
@@ -267,6 +324,14 @@ class ControllerOverlayView(context: Context, private val listener: Listener) : 
     }
 
     private fun pointerMove(id: Int, x: Float, y: Float) {
+        if (id == circlePointer) {
+            updateCircle(x, y)
+            return
+        }
+        if (id == stylusPointer && threeDs) {
+            layout?.to3dsPointer(x, y, clamp = true)?.let { (u, v) -> listener.onPointer(true, u, v) }
+            return
+        }
         if (id == stylusPointer) {
             val l = layout ?: return
             // Keep dragging even slightly outside the screen edge (clamped to the border).
@@ -297,9 +362,15 @@ class ControllerOverlayView(context: Context, private val listener: Listener) : 
     }
 
     private fun pointerUp(id: Int) {
+        if (id == circlePointer) {
+            circlePointer = -1
+            circleX = 0f
+            circleY = 0f
+            listener.onCirclePad(0f, 0f)
+        }
         if (id == stylusPointer) {
             stylusPointer = -1
-            listener.onStylus(false, 0, 0)
+            if (threeDs) listener.onPointer(false, 0f, 0f) else listener.onStylus(false, 0, 0)
         }
         pointerDpad.remove(id)
         pointerControl.remove(id)?.let { if (it != ControlId.DPAD && pointerControl.values.none { v -> v == it }) release(it) }
@@ -329,10 +400,8 @@ class ControllerOverlayView(context: Context, private val listener: Listener) : 
         pointerControl.clear()
         pointerDpad.clear()
         for (b in pressedButtons.toList()) release(b)
-        if (stylusPointer != -1) {
-            stylusPointer = -1
-            listener.onStylus(false, 0, 0)
-        }
+        if (circlePointer != -1) pointerUp(circlePointer)
+        if (stylusPointer != -1) pointerUp(stylusPointer)
         publish()
     }
 

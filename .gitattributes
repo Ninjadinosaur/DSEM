@@ -6,3 +6,5 @@ gradlew text eol=lf
 *.bat text eol=crlf
 *.jar binary
 *.png binary
+# Patches are applied with git apply to LF sources; keep them byte-exact.
+*.patch eol=lf

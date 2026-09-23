@@ -3,6 +3,7 @@
 #include "DsCore.h"
 #include "GLPresenter.h"
 #include "GbaCore.h"
+#include "ThreeDsCore.h"
 #include "IoWorker.h"
 #include "LogBuffer.h"
 #include "PerfManager.h"
@@ -76,6 +77,14 @@ bool EndsWith(const std::string& s, const char* suffix)
     size_t n = strlen(suffix);
     if (s.size() < n) return false;
     return strcasecmp(s.c_str() + s.size() - n, suffix) == 0;
+}
+
+// The file's extension if it is a 3DS game (lower case), else "".
+std::string ThreeDsExtension(const std::string& fileName)
+{
+    for (const char* ext : {".3ds", ".cci", ".cxi", ".3dsx", ".app", ".elf", ".axf"})
+        if (EndsWith(fileName, ext)) return ext;
+    return {};
 }
 }
 
@@ -219,6 +228,20 @@ std::string EmuSession::LoadGame(int fd, const std::string& fileName, const std:
 {
     std::string error;
     Post([&] {
+        std::string gameKey = SanitizeName(key);
+        // 3DS games run to gigabytes: the engine streams them from the file instead.
+        std::string ext = ThreeDsExtension(fileName);
+        if (!ext.empty())
+        {
+            SwapCore(nullptr);
+            config.SetInt("video.scaleCap", 0);
+            auto next = std::make_unique<ThreeDsCore>(*this);
+            error = next->LoadGame(fd, ext, gameKey);
+            if (error.empty()) SwapCore(std::move(next));
+            running = error.empty();
+            return;
+        }
+
         std::unique_ptr<uint8_t[]> rom;
         uint32_t len = 0;
         if (!ReadFd(fd, rom, len))
@@ -229,7 +252,6 @@ std::string EmuSession::LoadGame(int fd, const std::string& fileName, const std:
         SwapCore(nullptr);
         config.SetInt("video.scaleCap", 0);
 
-        std::string gameKey = SanitizeName(key);
         // The extension decides. Only unknown extensions fall back to sniffing the header, and
         // DS files can't be sniffed as GBA: devkitARM homebrew embeds a GBA-style header so old
         // flash carts can boot it.
@@ -292,6 +314,19 @@ std::string EmuSession::SystemName()
     std::string name;
     Post([&] { name = core ? core->SystemName() : ""; }, true);
     return name;
+}
+
+bool EmuSession::ThreeDsFrameSize(int& width, int& height)
+{
+    bool ok = false;
+    Post([&] {
+        if (core && strcmp(core->SystemName(), "3DS") == 0)
+        {
+            static_cast<ThreeDsCore*>(core.get())->FrameSize(width, height);
+            ok = true;
+        }
+    }, true);
+    return ok;
 }
 
 // ---------------------------------------------------------------------------
@@ -368,7 +403,19 @@ void EmuSession::SetPresentSettings(const PresentSettings& settings)
 
 void EmuSession::SetKeys(uint32_t pressedMask)
 {
-    keys.store(pressedMask & 0xFFF);
+    keys.store(pressedMask & 0x7FFF);
+}
+
+void EmuSession::SetAnalog(int stick, float x, float y)
+{
+    auto pack = [](float v) { return (uint32_t)(uint16_t)(int16_t)(std::clamp(v, -1.0f, 1.0f) * 32767.0f); };
+    (stick == 0 ? circlePad : cStick).store(pack(x) | (pack(y) << 16));
+}
+
+void EmuSession::SetPointer(bool down, float x, float y)
+{
+    auto pack = [](float v) { return (uint32_t)(std::clamp(v, 0.0f, 1.0f) * 32767.0f); };
+    pointerState.store((down ? 0x80000000u : 0u) | pack(x) | (pack(y) << 15));
 }
 
 void EmuSession::SetTouch(bool down, int x, int y)
@@ -609,6 +656,15 @@ void EmuSession::RunOneFrame()
     input.touchX = (int)(touch & 0xFF);
     input.touchY = (int)((touch >> 8) & 0xFF);
     input.lidRequest = lidRequest.exchange(-1);
+    auto unpackAxis = [](uint32_t v) { return (int16_t)(uint16_t)v / 32767.0f; };
+    uint32_t circle = circlePad.load(), cs = cStick.load(), pointer = pointerState.load();
+    input.circleX = unpackAxis(circle & 0xFFFF);
+    input.circleY = unpackAxis(circle >> 16);
+    input.cstickX = unpackAxis(cs & 0xFFFF);
+    input.cstickY = unpackAxis(cs >> 16);
+    input.pointerDown = (pointer & 0x80000000u) != 0;
+    input.pointerX = (pointer & 0x7FFF) / 32767.0f;
+    input.pointerY = ((pointer >> 15) & 0x7FFF) / 32767.0f;
 
     core->SyncClock();
     core->RunFrame(input);

@@ -51,6 +51,18 @@ data class LayoutResult(
         val dy = (v * 192f).toInt().coerceIn(0, 191)
         return dx to dy
     }
+
+    /**
+     * 3DS: a touch at (x, y) as a fraction of the composed frame (both screens in one image),
+     * or null if it is off the frame. The 3DS engine decides whether it hit the touch screen.
+     */
+    fun to3dsPointer(x: Float, y: Float, clamp: Boolean = false): Pair<Float, Float>? {
+        val s = screens.firstOrNull() ?: return null
+        if (!clamp && !s.rect.contains(x, y)) return null
+        val u = ((x - s.rect.left) / s.rect.width()).coerceIn(0f, 1f)
+        val v = ((y - s.rect.top) / s.rect.height()).coerceIn(0f, 1f)
+        return u to v
+    }
 }
 
 data class LayoutParams(
@@ -72,6 +84,8 @@ data class LayoutParams(
     val customLandscape: List<RectF>? = null,
     /** Game Boy Advance: a single 240x160 screen. */
     val gba: Boolean = false,
+    /** Nintendo 3DS: the engine composes both screens into one frame of this shape (native pixels). */
+    val threeDsFrame: Pair<Int, Int>? = null,
 )
 
 /**
@@ -96,6 +110,7 @@ object ScreenLayout {
         val portrait = p.height >= p.width
         val safe = RectF(p.safeLeft.toFloat(), p.safeTop.toFloat(), (p.width - p.safeRight).toFloat(), (p.height - p.safeBottom).toFloat())
         if (p.gba) return gba(p, safe, portrait)
+        p.threeDsFrame?.let { return threeDs(p, safe, portrait, it.first.toFloat(), it.second.toFloat()) }
         val main = if (p.swap) 1 else 0
         val other = 1 - main
 
@@ -213,6 +228,36 @@ object ScreenLayout {
         val scale = if (portrait || p.integerScale) max(1f, floor(raw)) else raw
         val w = GBA_W * scale
         val h = GBA_H * scale
+        val left = safe.left + (safe.width() - w) / 2f
+        val top = if (portrait) safe.top else safe.top + (safe.height() - h) / 2f
+        val rect = RectF(left, top, left + w, top + h)
+        val controls = if (portrait) RectF(safe.left, rect.bottom, safe.right, safe.bottom) else RectF(safe)
+        return LayoutResult(listOf(PlacedScreen(0, rect)), controls, portrait)
+    }
+
+    /**
+     * Nintendo 3DS frame shapes for the engine's layout options (native pixels, before upscaling).
+     * Portrait always stacks the screens (400 x 480); landscape offers stacked, side by side
+     * (720 x 240) or a large top screen with a small bottom one (480 x 240).
+     */
+    fun threeDsFrame(landscape: Boolean, landscapeLayout: Int): Pair<Int, Int> = when {
+        !landscape -> 400 to 480
+        landscapeLayout == 1 -> 720 to 240
+        landscapeLayout == 2 -> 480 to 240
+        else -> 400 to 480
+    }
+
+    /**
+     * 3DS: one composed image. Portrait: full width at the top (3x = 1200 x 1440 on the 13R),
+     * controls below. Landscape: centred, filling the height, controls either side.
+     */
+    private fun threeDs(p: LayoutParams, safe: RectF, portrait: Boolean, fw: Float, fh: Float): LayoutResult {
+        val maxH = if (portrait) safe.height() * 0.6f else safe.height()
+        val raw = min(safe.width() / fw, maxH / fh)
+        // Whole-number scaling only in portrait: in landscape it would drop the 13R from 2.6x to 2x.
+        val scale = if (portrait && p.integerScale && raw >= 1f) floor(raw) else raw
+        val w = fw * scale
+        val h = fh * scale
         val left = safe.left + (safe.width() - w) / 2f
         val top = if (portrait) safe.top else safe.top + (safe.height() - h) / 2f
         val rect = RectF(left, top, left + w, top + h)

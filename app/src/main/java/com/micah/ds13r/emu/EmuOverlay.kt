@@ -75,6 +75,7 @@ import java.util.Date
 class EmuUiState {
     val title = mutableStateOf("")
     val isGba = mutableStateOf(false)
+    val is3ds = mutableStateOf(false)
     val menuOpen = mutableStateOf(false)
     val message = mutableStateOf<String?>(null)
     val fatalError = mutableStateOf<String?>(null)
@@ -228,8 +229,8 @@ private fun StateSlots(ui: EmuUiState, loading: Boolean, onPick: (Int) -> Unit) 
                     .clickable(enabled = enabled) { onPick(slot.index) }
                     .padding(6.dp),
             ) {
-                // Thumbnails show the whole console: two stacked DS screens, or the GBA's one wide screen.
-                Box(Modifier.fillMaxWidth().aspectRatio(if (ui.isGba.value) 240f / 160f else 256f / 384f).background(Color(0xFF1A1A1A), RoundedCornerShape(6.dp)), contentAlignment = Alignment.Center) {
+                // Thumbnails show the whole console: two stacked DS or 3DS screens, or the GBA's one wide screen.
+                Box(Modifier.fillMaxWidth().aspectRatio(if (ui.isGba.value) 240f / 160f else if (ui.is3ds.value) 400f / 480f else 256f / 384f).background(Color(0xFF1A1A1A), RoundedCornerShape(6.dp)), contentAlignment = Alignment.Center) {
                     val bmp = remember(slot.thumbnail?.path, slot.timestamp) {
                         slot.thumbnail?.let { BitmapFactory.decodeFile(it.path)?.asImageBitmap() }
                     }

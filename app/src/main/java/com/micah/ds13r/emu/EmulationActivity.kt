@@ -76,6 +76,7 @@ class EmulationActivity : ComponentActivity(),
 
     private var game: Game? = null
     private val isGba get() = game?.isGba == true
+    private val is3ds get() = game?.is3ds == true
     private var gameKey = "firmware"
     private lateinit var states: SaveStates
 
@@ -116,13 +117,14 @@ class EmulationActivity : ComponentActivity(),
         states = SaveStates(filesDir, gameKey)
         ui.title.value = game?.title ?: "DS menu"
         ui.isGba.value = isGba
+        ui.is3ds.value = is3ds
 
         setupWindow()
 
         val root = FrameLayout(this)
         root.setBackgroundColor(android.graphics.Color.BLACK)
         surfaceView = SurfaceView(this).also { it.holder.addCallback(this) }
-        overlay = ControllerOverlayView(this, touchListener)
+        overlay = ControllerOverlayView(this, touchListener).also { it.threeDs = is3ds }
         val compose = ComposeView(this).apply {
             setContent { Ds13rTheme(forceDark = true) { EmuOverlay(ui, this@EmulationActivity) } }
         }
@@ -140,7 +142,7 @@ class EmulationActivity : ComponentActivity(),
             insets
         }
 
-        gamepad = GamepadMapper(this, padListener)
+        gamepad = GamepadMapper(this, padListener).also { it.threeDs = is3ds }
         inputManager = getSystemService(InputManager::class.java)
         inputManager.registerInputDeviceListener(this, null)
         vibrator = getSystemService(VibratorManager::class.java)?.defaultVibrator
@@ -190,7 +192,10 @@ class EmulationActivity : ComponentActivity(),
                 }
             }
             if (error != null) {
-                ui.fatalError.value = error
+                ui.fatalError.value = if (is3ds && game?.encrypted == true)
+                    "$error\n\nThis 3DS game is an encrypted dump. The 3DS engine only runs decrypted games: " +
+                        "decrypt it on your 3DS with GodMode9, copy it back and rescan the library."
+                else error
                 return@launch
             }
 
@@ -239,6 +244,7 @@ class EmulationActivity : ComponentActivity(),
     private fun updateHiddenControls() {
         val hidden = mutableSetOf<ControlId>()
         if (isGba) hidden += ControlLayouts.gbaHidden
+        if (is3ds) hidden += ControlLayouts.threeDsHidden else hidden += ControlLayouts.threeDsOnly
         if (!settings.bool("rewind.enabled", gameKey)) hidden += ControlId.REWIND
         if (settings.int("audio.micMode") == 1) hidden -= ControlId.BLOW
         overlay.hiddenIds = hidden
@@ -246,6 +252,7 @@ class EmulationActivity : ComponentActivity(),
 
     private fun relayout() {
         if (surfaceWidth == 0 || surfaceHeight == 0) return
+        val landscape = surfaceWidth > surfaceHeight
         val params = LayoutParams(
             width = surfaceWidth,
             height = surfaceHeight,
@@ -259,16 +266,36 @@ class EmulationActivity : ComponentActivity(),
             customPortrait = CustomLayouts.load(filesDir, gameKey, portrait = true),
             customLandscape = CustomLayouts.load(filesDir, gameKey, portrait = false),
             gba = isGba,
+            threeDsFrame = if (is3ds) ScreenLayout.threeDsFrame(landscape, settings.int("3ds.landscapeLayout", gameKey)) else null,
         )
+        if (is3ds) update3dsLayout(landscape)
         val result = ScreenLayout.compute(params)
         overlay.layout = result
         val specs = when {
             isGba -> if (result.portrait) ControlLayouts.gbaPortrait() else ControlLayouts.gbaLandscape()
+            is3ds -> CustomLayouts.loadControls(filesDir, gameKey, result.portrait)
+                ?: if (result.portrait) ControlLayouts.threeDsPortrait() else ControlLayouts.threeDsLandscape()
             else -> CustomLayouts.loadControls(filesDir, gameKey, result.portrait)
                 ?: if (result.portrait) ControlLayouts.defaultPortrait() else ControlLayouts.defaultLandscape()
         }
         overlay.specs = if (settings.int("audio.micMode") == 1) specs.map { if (it.id == ControlId.BLOW.name) it.copy(visible = true) else it } else specs
         NativeBridge.nativeSetLayout(result.toNative())
+    }
+
+    private var last3dsLayout = ""
+
+    /**
+     * The 3DS engine composes the screens itself, so it has to be told the orientation and
+     * screen swap; it re-reads its options on the next frame.
+     */
+    private fun update3dsLayout(landscape: Boolean) {
+        val swap = settings.bool("layout.swap", gameKey)
+        val key = "$landscape/$swap"
+        if (key == last3dsLayout) return
+        last3dsLayout = key
+        NativeBridge.nativeSetConfigInt("3ds.landscape", if (landscape) 1 else 0)
+        NativeBridge.nativeSetConfigInt("3ds.swap", if (swap) 1 else 0)
+        NativeBridge.nativeApplyLiveSettings()
     }
 
     // ------------------------------------------------------------------ lifecycle
@@ -284,12 +311,12 @@ class EmulationActivity : ComponentActivity(),
 
     /**
      * Phone sensors standing in for cartridge hardware (features.md §10): tilt/gyro carts
-     * (WarioWare: Twisted!, Yoshi Topsy-Turvy) and Boktai's solar sensor. Only while a GBA game
-     * runs, to save battery.
+     * (WarioWare: Twisted!, Yoshi Topsy-Turvy), Boktai's solar sensor, and the 3DS's own
+     * accelerometer and gyroscope. Only while a GBA or 3DS game runs, to save battery.
      */
     private fun registerSensors() {
         val sm = sensorManager ?: return
-        if (!isGba) return
+        if (!isGba && !is3ds) return
         for (type in intArrayOf(Sensor.TYPE_ACCELEROMETER, Sensor.TYPE_GYROSCOPE, Sensor.TYPE_LIGHT)) {
             sm.getDefaultSensor(type)?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
         }
@@ -551,6 +578,8 @@ class EmulationActivity : ComponentActivity(),
         }
 
         override fun onStylus(down: Boolean, x: Int, y: Int) = NativeBridge.nativeSetTouch(down, x, y)
+        override fun onCirclePad(x: Float, y: Float) = NativeBridge.nativeSetAnalog(0, x, y)
+        override fun onPointer(down: Boolean, x: Float, y: Float) = NativeBridge.nativeSetPointer(down, x, y)
         override fun onButton(id: ControlId, pressed: Boolean) = onTouchButton(id, pressed)
         override fun onHaptic() = haptic()
     }
@@ -563,6 +592,7 @@ class EmulationActivity : ComponentActivity(),
 
         override fun onHotkey(hotkey: Hotkey, pressed: Boolean) = handleHotkey(hotkey, pressed)
         override fun onStickStylus(active: Boolean, x: Float, y: Float) = stickStylus(active, x, y)
+        override fun onAnalog(stick: Int, x: Float, y: Float) = NativeBridge.nativeSetAnalog(stick, x, y)
     }
 
     private fun onTouchButton(id: ControlId, pressed: Boolean) {

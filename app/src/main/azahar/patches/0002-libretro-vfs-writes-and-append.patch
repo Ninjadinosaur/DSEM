@@ -1,0 +1,32 @@
+diff --git a/src/common/file_util.cpp b/src/common/file_util.cpp
+index 3168a26..52881ba 100644
+--- a/src/common/file_util.cpp
++++ b/src/common/file_util.cpp
+@@ -1395,6 +1395,13 @@ bool IOFile::Open() {
+ #else
+     m_file = FOPEN(filename.c_str(), openmode.c_str());
+     m_good = m_file != nullptr;
++#if defined(HAVE_LIBRETRO_VFS)
++    // rfopen leaves "a+" files positioned at the end; stdio starts reading at the beginning
++    // (writes are sent to the end in WriteImpl).
++    if (m_good && openmode.find('a') != std::string::npos && openmode.find('+') != std::string::npos) {
++        rfseek(m_file, 0, SEEK_SET);
++    }
++#endif
+ #endif
+ 
+     return m_good;
+@@ -1527,7 +1534,12 @@ std::size_t IOFile::WriteImpl(const void* data, std::size_t length, std::size_t
+ 
+     std::size_t written;
+ #if defined(HAVE_LIBRETRO_VFS)
+-    written = rfwrite(data, elem_size, length, m_file) / elem_size;
++    // Append mode: every write goes to the end of the file, as with stdio.
++    if (openmode.find('a') != std::string::npos) {
++        rfseek(m_file, 0, SEEK_END);
++    }
++    // rfwrite already returns a count of elements, like fwrite.
++    written = rfwrite(data, elem_size, length, m_file);
+ #else
+     written = std::fwrite(data, elem_size, length, m_file);
+ #endif

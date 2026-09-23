@@ -23,3 +23,21 @@ Keep this list current so upstream updates can be merged cleanly.
    dereferenced `NDS::Current` unconditionally, so a crash on any thread without a running console
    crashed again inside the handler and no crash report was produced. It now passes such faults to
    the previous handler, and `~NDS` clears the (thread-local) `Current` pointer.
+
+## Azahar (third_party/azahar, release 2126.1.2): git submodule
+
+Azahar and its own dependencies are ~430 MB of source, so it is a git submodule pinned to the
+upstream release rather than copied in. After cloning this repository run:
+
+    git submodule update --init --recursive
+
+Our fixes are kept as patch files in `app/src/main/azahar/patches/`; the Gradle task
+`patchAzahar` applies them automatically before the 3DS core is built.
+
+1. `0001-error-strerror_r-overloads.patch`, `src/common/error.cpp`: `strerror_r` returns `int` or `char*` depending on libc/API level;
+   the Android libretro build assumed API 21. Replaced the `#if` with overloads that accept either.
+2. `0002-libretro-vfs-writes-and-append.patch`, `src/common/file_util.cpp`: two bugs in file access
+   through libretro. Writes divided the element count by the element size twice, so any write of
+   a multi-byte value was reported as failed. And files opened for reading and appending ("a+")
+   started at the end instead of the beginning. Together they made the shader cache delete
+   itself on every launch, so every shader was recompiled (stutter) each session.

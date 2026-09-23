@@ -19,6 +19,7 @@ enum class Category(val title: String) {
     Firmware("DS profile"),
     Bios("BIOS & firmware"),
     Dsi("DSi"),
+    ThreeDs("Nintendo 3DS"),
     Accessories("GBA slot accessories"),
     Developer("Developer"),
 }
@@ -206,6 +207,17 @@ object SettingDefs {
             default = true, needsRestart = true, dependsOn = "emu.externalBios"),
         SettingDef("bios.gba", "GBA BIOS (gba_bios.bin)", "Optional; mGBA's built-in BIOS works for almost every game",
             Category.Bios, SettingKind.File(), "", needsRestart = true, dependsOn = "emu.externalBios"),
+
+        // ---- Nintendo 3DS ----
+        SettingDef("3ds.scale", "3DS resolution", "3x fills the 13R screen in portrait. Higher costs heat and battery",
+            Category.ThreeDs, SettingKind.Choice((1..6).map { it to "${it}x (${400 * it}×${240 * it})" }), 3, perGame = true),
+        SettingDef("3ds.landscapeLayout", "3DS landscape layout", category = Category.ThreeDs,
+            kind = SettingKind.Choice(listOf(0 to "Stacked, controls either side", 1 to "Side by side", 2 to "Large top screen")),
+            default = 0, perGame = true),
+        SettingDef("3ds.textureFilter", "3DS texture filter", "Smooths low-resolution textures", Category.ThreeDs,
+            SettingKind.Choice(listOf(0 to "None", 1 to "xBRZ", 2 to "ScaleForce", 3 to "MMPX", 4 to "Bicubic")), 0, perGame = true),
+        SettingDef("3ds.new3ds", "New 3DS mode", "Extra CPU power some games use. Turn off only if a game misbehaves",
+            Category.ThreeDs, SettingKind.Toggle, true, perGame = true, needsRestart = true),
 
         // ---- DSi ----
         SettingDef("bios.dsiArm9", "DSi ARM9 BIOS", category = Category.Dsi, kind = SettingKind.File(), default = "", needsRestart = true),

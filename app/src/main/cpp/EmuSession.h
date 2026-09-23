@@ -64,14 +64,14 @@ public:
     void Init(JavaVM* vm, jobject activity, const std::string& filesDir);
     void SetCallbacks(const HostCallbacks& cb);
 
-    // Loads a DS or GBA game (detected from the file) from an open file descriptor.
+    // Loads a DS, GBA or 3DS game (detected from the file) from an open file descriptor.
     // `gameKey` names the game's saves and states. Returns "" or a message for the player.
     std::string LoadGame(int fd, const std::string& fileName, const std::string& gameKey);
     // Boots the DS firmware menu without a cartridge (needs real BIOS/firmware dumps).
     std::string BootFirmware();
     // Inserts a GBA game into the DS's GBA slot (only while a DS game runs).
     std::string LoadGbaSlotRom(int fd, const std::string& fileName);
-    // "DS", "GBA" or "" when nothing is loaded.
+    // "DS", "GBA", "3DS" or "" when nothing is loaded.
     std::string SystemName();
 
     void Start();
@@ -89,6 +89,11 @@ public:
     // Input (any thread)
     void SetKeys(uint32_t pressedMask);
     void SetTouch(bool down, int x, int y);
+    // 3DS: stick 0 = circle pad, 1 = C-stick, -1..1 (y down); touch as a fraction of the frame.
+    void SetAnalog(int stick, float x, float y);
+    void SetPointer(bool down, float x, float y);
+    // 3DS: size of the composed frame (both screens), or false when no 3DS game runs.
+    bool ThreeDsFrameSize(int& width, int& height);
     void SetLidClosed(bool closed);
     void SetBlow(bool active) { blowActive.store(active); }
     void SetMicAllowed(bool allowed) { audio.SetMicAllowed(allowed); }
@@ -179,6 +184,8 @@ private:
     std::atomic<uint32_t> keys {0};
     std::atomic<uint32_t> touchState {0};   // bit31 = down, x in bits 0-7, y in bits 8-15
     std::atomic<int> lidRequest {-1};
+    std::atomic<uint32_t> circlePad {0}, cStick {0}; // x in the low 16 bits, y high, signed
+    std::atomic<uint32_t> pointerState {0};           // bit31 = down, x bits 0-14, y bits 15-29
     std::atomic<bool> blowActive {false};
     std::atomic<uint32_t> guitarKeys {0};
     std::atomic<float> motion[6] {};

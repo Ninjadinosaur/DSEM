@@ -246,9 +246,9 @@ private fun GameCard(game: Game, modifier: Modifier, onClick: () -> Unit, onLong
             if (icon != null) {
                 // Pixel-art icons scaled with nearest-neighbour to stay sharp.
                 Image(icon, game.title, filterQuality = FilterQuality.None, modifier = Modifier.fillMaxSize().padding(14.dp))
-            } else if (game.isGba) {
-                // GBA cartridges carry no icon.
-                Text("GBA", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.primary)
+            } else if (game.isGba || game.is3ds) {
+                // GBA cartridges carry no icon; encrypted 3DS dumps hide theirs.
+                Text(game.system, style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.primary)
             } else {
                 Icon(Icons.Default.SportsEsports, null, Modifier.size(40.dp))
             }
@@ -314,7 +314,7 @@ private fun GameSheet(game: Game, onDismiss: () -> Unit, onGameSettings: () -> U
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Text(game.title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(horizontal = 24.dp))
         Text(
-            "${if (game.isGba) "Game Boy Advance" else "Nintendo DS"}  ·  ${game.gameCode}  ·  ${game.size / (1024 * 1024)} MB  ·  played ${game.playTimeSeconds / 3600} h ${(game.playTimeSeconds / 60) % 60} min",
+            "${if (game.isGba) "Game Boy Advance" else if (game.is3ds) (if (game.encrypted) "Nintendo 3DS (encrypted: won't run)" else "Nintendo 3DS") else "Nintendo DS"}  ·  ${game.gameCode}  ·  ${game.size / (1024 * 1024)} MB  ·  played ${game.playTimeSeconds / 3600} h ${(game.playTimeSeconds / 60) % 60} min",
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(horizontal = 24.dp),
         )

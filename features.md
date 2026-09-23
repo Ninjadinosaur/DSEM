@@ -1,6 +1,6 @@
-# Nintendo DS & Game Boy Advance Emulator for the OnePlus 13R — Feature List
+# Nintendo DS, Game Boy Advance & 3DS Emulator for the OnePlus 13R — Feature List
 
-An Android DS and GBA emulator built **for one device only: the OnePlus 13R**. The app is written on a PC
+An Android DS, GBA and 3DS emulator built **for one device only: the OnePlus 13R**. The app is written on a PC
 (Android Studio + NDK) and run, profiled and debugged directly on the 13R.
 
 Because the target is one fixed phone, every choice below is tuned to its exact hardware rather than
@@ -76,6 +76,25 @@ emulator; also used by RetroArch and Delta). They share the app's library, contr
 | Rumble cartridges → phone vibration motor | P2 | *Drill Dozer* |
 | Screen filters and colour correction | P1 | Same filters as DS; GBA LCD colour correction |
 | GBA link cable between two phones | P2 | Over Wi-Fi 7 |
+
+## 1c. Nintendo 3DS Games
+
+3DS games run through a third engine, **Azahar** (the maintained successor to Citra and
+Lime3DS), built into the app. It is loaded only when a 3DS game starts, so DS and GBA play is unaffected.
+
+| Feature | Priority | 13R optimisation / notes |
+|---|---|---|
+| **Play 3DS games (.3ds, .cci, .cxi, .3dsx) from the same library** | P0 | Title and icon read from the game; one tap to play. Games are streamed from storage, never copied |
+| Decrypted dumps only; encrypted dumps flagged in the library | P0 | Azahar can't run encrypted games. The library marks them and explains how to decrypt with GodMode9 |
+| **OpenGL ES renderer with upscaling, default 3×** | P0 | 3× (1200 × 1440 for both screens) fills the 13R's width in portrait. Offer 1×–6× |
+| **Layouts for the two 3DS screens** | P0 | Portrait: screens stacked at the top, controls below. Landscape: stacked with controls either side, side by side, or large top screen |
+| 3DS on-screen controls: circle pad, D-pad, A/B/X/Y, L/R, ZL/ZR, Start, Select, Home | P0 | Analog circle pad; touch goes straight to the bottom screen |
+| Controllers: left stick = circle pad, right stick = C-stick, triggers = ZL/ZR | P0 | Same controller support as DS games |
+| Motion controls → phone accelerometer and gyroscope | P1 | For games that use the 3DS's gyro |
+| New 3DS mode (on by default) | P1 | Extra CPU power; can be turned off per game |
+| Save states, fast-forward, screenshots | P0 | Rewind is not offered: a 3DS snapshot is too large to take every few frames |
+| Texture filters (xBRZ, ScaleForce, MMPX, Bicubic) | P2 | Per game |
+| Game saves and extra data | P0 | Kept in app storage by Azahar, like a real console's SD card |
 
 ## 2. Nintendo DSi Support
 
@@ -234,7 +253,7 @@ emulator; also used by RetroArch and Delta). They share the app's library, contr
 
 ## Suggested MVP Scope (P0)
 
-1. ARM64 JIT + accurate CPU, 2D, 3D and audio emulation, with no BIOS files needed; GBA games through mGBA
+1. ARM64 JIT + accurate CPU, 2D, 3D and audio emulation, with no BIOS files needed; GBA games through mGBA; 3DS games through Azahar
 2. Vulkan renderer at 4× by default, with preset layouts sized for the 13R and 60 Hz frame pacing
 3. On-screen touch controls + Bluetooth controllers, remapping and hotkeys
 4. Battery saves, save states, auto-save on exit, fast-forward

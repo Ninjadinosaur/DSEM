@@ -48,11 +48,22 @@ public:
 // (Bits 0-9 are also exactly the GBA's key order.)
 struct CoreInput
 {
+    // 3DS extras above the DS keys: bit 12 ZL, 13 ZR, 14 HOME.
     uint32_t keys = 0;
     bool touching = false;
     int touchX = 0, touchY = 0;
     int lidRequest = -1; // -1 = no change, 0 = open, 1 = close
+    // 3DS: circle pad and C-stick, -1..1 (y down), and touch as a fraction of the whole
+    // composed frame (the core works out which screen was touched).
+    float circleX = 0, circleY = 0, cstickX = 0, cstickY = 0;
+    bool pointerDown = false;
+    float pointerX = 0, pointerY = 0;
 };
+
+// Key bits beyond the DS's twelve.
+constexpr uint32_t kKeyZL = 1u << 12;
+constexpr uint32_t kKeyZR = 1u << 13;
+constexpr uint32_t kKeyHome = 1u << 14;
 
 // Where the current frame's pixels are.
 struct FrameInfo

@@ -73,6 +73,83 @@ android {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Nintendo 3DS engine: Azahar's libretro core, built as its own shared library with its own
+// toolchain settings (C++20, static libc++) and loaded only when a 3DS game starts.
+// ---------------------------------------------------------------------------------------------
+val isWindows = System.getProperty("os.name").startsWith("Windows")
+val exe = if (isWindows) ".exe" else ""
+val sdkDir: File = androidComponents.sdkComponents.sdkDirectory.get().asFile
+val ndkDir = File(sdkDir, "ndk/${android.ndkVersion}")
+val cmakeExe = File(sdkDir, "cmake/4.1.2/bin/cmake$exe").absolutePath
+val ninjaExe = File(sdkDir, "cmake/4.1.2/bin/ninja$exe").absolutePath
+val azaharSrc = rootProject.file("third_party/azahar")
+val azaharBuild = layout.buildDirectory.dir("azahar/build").get().asFile
+val azaharJniLibs = layout.buildDirectory.dir("azahar/jniLibs").get().asFile
+val azaharExports = file("src/main/azahar/exports.map")
+val azaharPatches = file("src/main/azahar/patches")
+
+// Azahar is a git submodule pinned to an upstream release; our few fixes live here as patches
+// and are applied to the checkout once (a patch that already applies in reverse is skipped).
+val patchAzahar = tasks.register("patchAzahar") {
+    description = "Applies app/src/main/azahar/patches to the Azahar submodule."
+    inputs.dir(azaharPatches)
+    doLast {
+        if (!File(azaharSrc, "CMakeLists.txt").exists()) {
+            throw GradleException("third_party/azahar is empty: run `git submodule update --init --recursive`")
+        }
+        fun git(vararg args: String): Int =
+            ProcessBuilder(listOf("git", "-C", azaharSrc.absolutePath) + args).inheritIO().start().waitFor()
+        azaharPatches.listFiles { f -> f.extension == "patch" }!!.sorted().forEach { patch ->
+            val alreadyApplied = ProcessBuilder("git", "-C", azaharSrc.absolutePath, "apply", "--reverse", "--check", patch.absolutePath)
+                .redirectErrorStream(true).start().waitFor() == 0
+            if (!alreadyApplied && git("apply", patch.absolutePath) != 0) {
+                throw GradleException("Could not apply ${patch.name} to third_party/azahar")
+            }
+        }
+    }
+}
+
+val configureAzahar = tasks.register<Exec>("configureAzahar") {
+    description = "Configures the Azahar (3DS) libretro core for arm64 Android."
+    dependsOn(patchAzahar)
+    onlyIf { !File(azaharBuild, "build.ninja").exists() }
+    doFirst { azaharBuild.mkdirs() }
+    commandLine(
+        cmakeExe, "-G", "Ninja", "-DCMAKE_MAKE_PROGRAM=$ninjaExe",
+        "-DCMAKE_TOOLCHAIN_FILE=${File(ndkDir, "build/cmake/android.toolchain.cmake").absolutePath}",
+        "-DANDROID_ABI=arm64-v8a", "-DANDROID_PLATFORM=android-35", "-DANDROID_STL=c++_static",
+        "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON",
+        "-DCMAKE_BUILD_TYPE=Release", "-DENABLE_LIBRETRO=ON", "-DENABLE_TESTS=OFF",
+        "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--version-script=${azaharExports.absolutePath}",
+        // Its third-party dependencies use old cmake_minimum_required values; not our code.
+        "-Wno-dev", "-Wno-deprecated",
+        "-S", azaharSrc.absolutePath, "-B", azaharBuild.absolutePath,
+    )
+}
+
+val compileAzahar = tasks.register<Exec>("compileAzahar") {
+    description = "Builds azahar_libretro.so (incremental)."
+    dependsOn(configureAzahar)
+    commandLine(cmakeExe, "--build", azaharBuild.absolutePath, "--target", "citra_libretro", "--config", "Release")
+}
+
+val buildAzahar = tasks.register<Exec>("buildAzahar") {
+    description = "Strips the 3DS core (hundreds of MB of debug info) into jniLibs as libazahar_libretro.so."
+    dependsOn(compileAzahar)
+    val out = File(azaharJniLibs, "arm64-v8a")
+    doFirst { out.mkdirs() }
+    val strip = File(ndkDir, "toolchains/llvm/prebuilt/${if (isWindows) "windows-x86_64" else "linux-x86_64"}/bin/llvm-strip$exe")
+    commandLine(
+        strip.absolutePath, "--strip-unneeded",
+        "-o", File(out, "libazahar_libretro.so").absolutePath,
+        File(azaharBuild, "bin/Release/azahar_libretro.so").absolutePath,
+    )
+}
+
+android.sourceSets.getByName("main").jniLibs.directories.add(azaharJniLibs.absolutePath)
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }.configureEach { dependsOn(buildAzahar) }
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)

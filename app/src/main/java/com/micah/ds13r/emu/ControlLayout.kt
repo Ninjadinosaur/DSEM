@@ -19,6 +19,11 @@ enum class ControlId(val label: String, val dsKey: Int = 0) {
     REWIND("«"),
     SWAP("⇅"),
     BLOW("MIC"),
+    // 3DS only
+    CIRCLE_PAD("Circle pad"),
+    ZL("ZL", NativeBridge.Keys.ZL),
+    ZR("ZR", NativeBridge.Keys.ZR),
+    HOME("HOME", NativeBridge.Keys.HOME),
 }
 
 /**
@@ -90,6 +95,55 @@ object ControlLayouts {
             else -> it
         }
     }
+
+    /** Controls only the 3DS has; hidden for DS and GBA games. */
+    val threeDsOnly = setOf(ControlId.CIRCLE_PAD, ControlId.ZL, ControlId.ZR, ControlId.HOME)
+
+    /** Controls a 3DS game doesn't use: the engine has no rewind, microphone blowing or lid. */
+    val threeDsHidden = setOf(ControlId.REWIND, ControlId.BLOW)
+
+    /**
+     * 3DS portrait: circle pad above the D-pad on the left like the real console, face buttons on
+     * the right, shoulder buttons in the corners with ZL/ZR just inside them.
+     */
+    fun threeDsPortrait(): List<ControlSpec> = listOf(
+        ControlSpec(ControlId.L.name, 0.12f, 0.05f, 56f),
+        ControlSpec(ControlId.ZL.name, 0.10f, 0.16f, 42f),
+        ControlSpec(ControlId.R.name, 0.88f, 0.05f, 56f),
+        ControlSpec(ControlId.ZR.name, 0.90f, 0.16f, 42f),
+        ControlSpec(ControlId.MENU.name, 0.43f, 0.05f, 38f),
+        ControlSpec(ControlId.FAST_FORWARD.name, 0.57f, 0.05f, 38f),
+        ControlSpec(ControlId.CIRCLE_PAD.name, 0.21f, 0.40f, 110f),
+        ControlSpec(ControlId.DPAD.name, 0.21f, 0.80f, 90f),
+        ControlSpec(ControlId.A.name, 0.90f, 0.46f, 48f),
+        ControlSpec(ControlId.B.name, 0.76f, 0.62f, 48f),
+        ControlSpec(ControlId.X.name, 0.76f, 0.30f, 48f),
+        ControlSpec(ControlId.Y.name, 0.62f, 0.46f, 48f),
+        ControlSpec(ControlId.SWAP.name, 0.50f, 0.64f, 36f),
+        ControlSpec(ControlId.HOME.name, 0.50f, 0.80f, 36f),
+        ControlSpec(ControlId.SELECT.name, 0.42f, 0.94f, 34f),
+        ControlSpec(ControlId.START.name, 0.62f, 0.94f, 34f),
+    )
+
+    /** 3DS landscape: the image sits in the middle, controls on either side of it. */
+    fun threeDsLandscape(): List<ControlSpec> = listOf(
+        ControlSpec(ControlId.L.name, 0.06f, 0.08f, 56f),
+        ControlSpec(ControlId.ZL.name, 0.16f, 0.08f, 44f),
+        ControlSpec(ControlId.R.name, 0.94f, 0.08f, 56f),
+        ControlSpec(ControlId.ZR.name, 0.84f, 0.08f, 44f),
+        ControlSpec(ControlId.CIRCLE_PAD.name, 0.11f, 0.40f, 120f),
+        ControlSpec(ControlId.DPAD.name, 0.11f, 0.76f, 100f),
+        ControlSpec(ControlId.A.name, 0.955f, 0.48f, 56f),
+        ControlSpec(ControlId.B.name, 0.905f, 0.64f, 56f),
+        ControlSpec(ControlId.X.name, 0.905f, 0.32f, 56f),
+        ControlSpec(ControlId.Y.name, 0.855f, 0.48f, 56f),
+        ControlSpec(ControlId.SELECT.name, 0.84f, 0.93f, 36f),
+        ControlSpec(ControlId.START.name, 0.94f, 0.93f, 36f),
+        ControlSpec(ControlId.HOME.name, 0.89f, 0.80f, 40f),
+        ControlSpec(ControlId.MENU.name, 0.04f, 0.93f, 40f),
+        ControlSpec(ControlId.FAST_FORWARD.name, 0.19f, 0.93f, 40f),
+        ControlSpec(ControlId.SWAP.name, 0.115f, 0.93f, 40f),
+    )
 
     fun rectFor(spec: ControlSpec, area: RectF, density: Float, scale: Float): RectF {
         val size = spec.sizeDp * density * scale

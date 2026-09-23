@@ -9,6 +9,8 @@ set(THIRD_PARTY "${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party")
 set(MELONDS_DIR "${THIRD_PARTY}/melonDS")
 set(MGBA_DIR "${THIRD_PARTY}/mgba")
 set(LZ4_DIR "${THIRD_PARTY}/lz4")
+# Azahar (3DS) is built separately by Gradle into its own library; we only need the libretro API header.
+set(LIBRETRO_INCLUDE "${THIRD_PARTY}/azahar/externals/libretro-common/libretro-common/include")
 
 # ---- melonDS (Nintendo DS/DSi). The Qt/SDL desktop frontend is never built: Android only.
 set(BUILD_QT_SDL OFF CACHE BOOL "" FORCE)
@@ -65,13 +67,14 @@ add_library(ds13r SHARED
     PlatformAndroid.cpp
     RewindBuffer.cpp
     SaveFile.cpp
+    ThreeDsCore.cpp
     "${LZ4_DIR}/lz4.c"
 )
 
 target_include_directories(ds13r PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 # Vendored third-party headers: included as system headers so our stricter warnings only
 # apply to our own code.
-target_include_directories(ds13r SYSTEM PRIVATE "${MELONDS_DIR}/src" "${LZ4_DIR}")
+target_include_directories(ds13r SYSTEM PRIVATE "${MELONDS_DIR}/src" "${LZ4_DIR}" "${LIBRETRO_INCLUDE}")
 
 target_compile_options(ds13r PRIVATE -Wall -Wextra -Wno-unused-parameter -fwrapv)
 

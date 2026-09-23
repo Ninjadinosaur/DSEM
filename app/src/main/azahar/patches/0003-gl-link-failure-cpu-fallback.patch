@@ -1,0 +1,100 @@
+diff --git a/src/video_core/renderer_opengl/gl_rasterizer.cpp b/src/video_core/renderer_opengl/gl_rasterizer.cpp
+index 7c820e9..d47f1e0 100644
+--- a/src/video_core/renderer_opengl/gl_rasterizer.cpp
++++ b/src/video_core/renderer_opengl/gl_rasterizer.cpp
+@@ -624,6 +624,12 @@ bool RasterizerOpenGL::Draw(bool accelerate, bool is_indexed) {
+     // Sync and bind the shader
+     curr_shader_manager->UseFragmentShader(regs, user_config);
+ 
++    // The hardware vertex shader only works if the driver can link it with this draw's other
++    // stages; if not, report failure before drawing so the batch is redone with CPU vertex shading.
++    if (accelerate && !curr_shader_manager->LinkCurrentProgram(accurate_mul)) {
++        return false;
++    }
++
+     // Sync the LUTs within the texture buffer
+     SyncAndUploadLUTs();
+     SyncAndUploadLUTsLF();
+diff --git a/src/video_core/renderer_opengl/gl_shader_manager.cpp b/src/video_core/renderer_opengl/gl_shader_manager.cpp
+index ba05e32..159216c 100644
+--- a/src/video_core/renderer_opengl/gl_shader_manager.cpp
++++ b/src/video_core/renderer_opengl/gl_shader_manager.cpp
+@@ -8,6 +8,7 @@
+ #include <span>
+ #include <thread>
+ #include <unordered_map>
++#include <unordered_set>
+ #include <variant>
+ #include "common/hash.h"
+ #include "common/settings.h"
+@@ -326,6 +327,8 @@ public:
+ 
+     FragmentShaders fragment_shaders;
+     std::unordered_map<u64, OGLProgram> program_cache;
++    // Programs the driver refused to link (non-separable mode); their draws use the CPU path.
++    std::unordered_set<u64> failed_programs;
+     OGLPipeline pipeline;
+     ShaderDiskCache disk_cache;
+ 
+@@ -436,16 +439,38 @@ void ShaderProgramManager::ApplyTo(OpenGLState& state, bool accurate_mul) {
+         state.draw.shader_program = 0;
+         state.draw.program_pipeline = impl->pipeline.handle;
+     } else {
+-        const u64 unique_identifier = impl->current.GetConfigHash();
+-        OGLProgram& cached_program = impl->program_cache[unique_identifier];
+-        if (cached_program.handle == 0) {
+-            cached_program.Create(false,
+-                                  std::array{impl->current.vs, impl->current.gs, impl->current.fs});
+-            auto& disk_cache = impl->disk_cache;
+-            disk_cache.SaveDumpToFile(unique_identifier, cached_program.handle, accurate_mul);
++        LinkCurrentProgram(accurate_mul);
++        state.draw.shader_program = impl->program_cache[impl->current.GetConfigHash()].handle;
++    }
++}
++
++bool ShaderProgramManager::LinkCurrentProgram(bool accurate_mul) {
++    if (impl->separable) {
++        return true;
++    }
++    const u64 unique_identifier = impl->current.GetConfigHash();
++    if (impl->failed_programs.contains(unique_identifier)) {
++        return false;
++    }
++    OGLProgram& cached_program = impl->program_cache[unique_identifier];
++    if (cached_program.handle == 0) {
++        cached_program.Create(false,
++                              std::array{impl->current.vs, impl->current.gs, impl->current.fs});
++        GLint linked = GL_FALSE;
++        glGetProgramiv(cached_program.handle, GL_LINK_STATUS, &linked);
++        if (linked != GL_TRUE) {
++            // Some drivers (e.g. Adreno) reject very large translated PICA vertex shaders.
++            // Don't cache the broken program; its draws fall back to CPU vertex processing.
++            LOG_WARNING(Render_OpenGL, "Program {:016x} failed to link; using CPU vertex shading",
++                        unique_identifier);
++            impl->program_cache.erase(unique_identifier);
++            impl->failed_programs.insert(unique_identifier);
++            return false;
+         }
+-        state.draw.shader_program = cached_program.handle;
++        auto& disk_cache = impl->disk_cache;
++        disk_cache.SaveDumpToFile(unique_identifier, cached_program.handle, accurate_mul);
+     }
++    return true;
+ }
+ 
+ u64 ShaderProgramManager::GetProgramID() const {
+diff --git a/src/video_core/renderer_opengl/gl_shader_manager.h b/src/video_core/renderer_opengl/gl_shader_manager.h
+index 57aff7c..53f024e 100644
+--- a/src/video_core/renderer_opengl/gl_shader_manager.h
++++ b/src/video_core/renderer_opengl/gl_shader_manager.h
+@@ -54,6 +54,10 @@ public:
+ 
+     void ApplyTo(OpenGLState& state, bool accurate_mul);
+ 
++    /// Links the program for the currently selected stages (non-separable mode).
++    /// Returns false if the driver rejected it, so the draw can fall back to CPU vertex shading.
++    bool LinkCurrentProgram(bool accurate_mul);
++
+     u64 GetProgramID() const;
+ 
+ private:

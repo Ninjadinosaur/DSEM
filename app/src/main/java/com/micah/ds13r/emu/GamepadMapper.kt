@@ -48,7 +48,15 @@ class GamepadMapper(context: Context, private val listener: Listener) {
         fun onKeysChanged(mask: Int)
         fun onHotkey(hotkey: Hotkey, pressed: Boolean)
         fun onStickStylus(active: Boolean, x: Float, y: Float)
+        /** 3DS: stick 0 = circle pad, 1 = C-stick; -1..1 with y pointing down. */
+        fun onAnalog(stick: Int, x: Float, y: Float) {}
     }
+
+    /**
+     * A 3DS game: the left stick is the circle pad and the right stick the C-stick (both analog),
+     * and L2/R2 are ZL/ZR instead of their usual rewind/fast-forward hotkeys.
+     */
+    var threeDs = false
 
     private val file = File(context.filesDir, "gamepad.json")
     private val json = Json { ignoreUnknownKeys = true }
@@ -137,15 +145,19 @@ class GamepadMapper(context: Context, private val listener: Listener) {
     fun onMotionEvent(event: MotionEvent, stickStylus: Boolean): Boolean {
         if (!isGamepad(event.device) || event.action != MotionEvent.ACTION_MOVE) return false
 
-        // Left stick -> D-pad
+        // Left stick -> D-pad (3DS: circle pad)
         val lx = axis(event, MotionEvent.AXIS_X)
         val ly = axis(event, MotionEvent.AXIS_Y)
+        if (threeDs) {
+            listener.onAnalog(0, lx, ly)
+            listener.onAnalog(1, axis(event, MotionEvent.AXIS_Z), axis(event, MotionEvent.AXIS_RZ))
+        }
         var m = 0
         if (lx < -0.5f) m = m or NativeBridge.Keys.LEFT
         if (lx > 0.5f) m = m or NativeBridge.Keys.RIGHT
         if (ly < -0.5f) m = m or NativeBridge.Keys.UP
         if (ly > 0.5f) m = m or NativeBridge.Keys.DOWN
-        leftStickMask = m
+        leftStickMask = if (threeDs) 0 else m
 
         // Hat (many controllers report the D-pad this way)
         val hx = event.getAxisValue(MotionEvent.AXIS_HAT_X)
@@ -172,7 +184,7 @@ class GamepadMapper(context: Context, private val listener: Listener) {
         }
 
         // Right stick -> stylus cursor on the bottom screen.
-        if (stickStylus) {
+        if (stickStylus && !threeDs) {
             val rx = axis(event, MotionEvent.AXIS_Z)
             val ry = axis(event, MotionEvent.AXIS_RZ)
             if (abs(rx) > 0.15f || abs(ry) > 0.15f) {
@@ -204,8 +216,13 @@ class GamepadMapper(context: Context, private val listener: Listener) {
         val consumed = combos.flatMap { it.keys }.toSet()
 
         var mask = leftStickMask or hatMask
+        if (threeDs) {
+            if (KeyEvent.KEYCODE_BUTTON_L2 in held) mask = mask or NativeBridge.Keys.ZL
+            if (KeyEvent.KEYCODE_BUTTON_R2 in held) mask = mask or NativeBridge.Keys.ZR
+        }
         val hotkeysNow = HashSet<Hotkey>()
         for (b in profile.bindings) {
+            if (threeDs && b.keys.size == 1 && (b.keys[0] == KeyEvent.KEYCODE_BUTTON_L2 || b.keys[0] == KeyEvent.KEYCODE_BUTTON_R2)) continue
             val active = if (b.keys.size > 1) b in combos else (b.keys.first() in held && b.keys.first() !in consumed)
             if (!active) continue
             if (b.dsKey != 0) mask = mask or b.dsKey
@@ -229,6 +246,10 @@ class GamepadMapper(context: Context, private val listener: Listener) {
         hatMask = 0
         triggerL = false
         triggerR = false
+        if (threeDs) {
+            listener.onAnalog(0, 0f, 0f)
+            listener.onAnalog(1, 0f, 0f)
+        }
         evaluate()
     }
 }

@@ -29,14 +29,18 @@ data class Game(
     val favorite: Boolean = false,
     val lastPlayed: Long = 0,
     val playTimeSeconds: Long = 0,
-    /** "NDS" or "GBA". */
+    /** "NDS", "GBA" or "3DS". */
     val system: String = SYSTEM_NDS,
+    /** 3DS only: the dump is still encrypted, which the 3DS engine can't run. */
+    val encrypted: Boolean = false,
 ) {
     val isGba: Boolean get() = system == SYSTEM_GBA
+    val is3ds: Boolean get() = system == SYSTEM_3DS
 
     companion object {
         const val SYSTEM_NDS = "NDS"
         const val SYSTEM_GBA = "GBA"
+        const val SYSTEM_3DS = "3DS"
     }
 
     /** Names this game's saves, states, cheats and settings. Matches melonDS's "<rom name>.sav". */
@@ -150,7 +154,12 @@ class GameLibrary(private val context: Context) {
         }
     }
 
-    private fun isGameFile(name: String): Boolean = isDsFile(name) || isGbaFile(name)
+    private fun isGameFile(name: String): Boolean = isDsFile(name) || isGbaFile(name) || is3dsFile(name)
+
+    private fun is3dsFile(name: String): Boolean {
+        val ext = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
+        return ext == "3ds" || ext == "cci" || ext == "cxi" || ext == "3dsx"
+    }
 
     private fun isDsFile(name: String): Boolean {
         val ext = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
@@ -164,6 +173,7 @@ class GameLibrary(private val context: Context) {
 
     private fun readGame(uri: Uri, name: String, size: Long, modified: Long, prev: Game?): Game {
         if (isGbaFile(name)) return readGbaGame(uri, name, size, modified, prev)
+        if (is3dsFile(name)) return read3dsGame(uri, name, size, modified, prev)
         var title = name.substringBeforeLast('.')
         var code = ""
         var crc = 0
@@ -222,6 +232,44 @@ class GameLibrary(private val context: Context) {
             favorite = prev?.favorite ?: false, lastPlayed = prev?.lastPlayed ?: 0,
             playTimeSeconds = prev?.playTimeSeconds ?: 0, system = Game.SYSTEM_GBA,
         )
+    }
+
+    /** 3DS: title and icon from the game's SMDH; encrypted dumps fall back to the file name. */
+    private fun read3dsGame(uri: Uri, name: String, size: Long, modified: Long, prev: Game?): Game {
+        var title = name.substringBeforeLast('.').replace(Regex("\\s*\\([^)]*\\)"), "").trim().ifEmpty { name }
+        var code = ""
+        var encrypted = false
+        try {
+            context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                FileInputStream(pfd.fileDescriptor).channel.use { ch ->
+                    ThreeDsHeader.read(ch)?.let { info ->
+                        code = info.productCode
+                        encrypted = info.encrypted
+                        pick3dsTitle(info.titles)?.let { title = it }
+                        info.icon?.let { bmp ->
+                            val g = Game(uri.toString(), name, title)
+                            File(iconDir, "${g.key}.png").outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {
+        }
+        return Game(
+            uri = uri.toString(), fileName = name, title = title, gameCode = code, size = size, lastModified = modified,
+            favorite = prev?.favorite ?: false, lastPlayed = prev?.lastPlayed ?: 0,
+            playTimeSeconds = prev?.playTimeSeconds ?: 0, system = Game.SYSTEM_3DS, encrypted = encrypted,
+        )
+    }
+
+    /** SMDH titles are [short, long, publisher] per language; show the long name in the phone's language. */
+    private fun pick3dsTitle(titles: List<List<String>>): String? {
+        val index = when (Locale.getDefault().language) {
+            "ja" -> 0; "fr" -> 2; "de" -> 3; "it" -> 4; "es" -> 5; "zh" -> 6; "ko" -> 7; "nl" -> 8; "pt" -> 9; "ru" -> 10; else -> 1
+        }
+        fun longName(i: Int) = titles.getOrNull(i)?.let { it[1].ifBlank { null } ?: it[0].ifBlank { null } }
+        // Long names may themselves wrap onto two lines.
+        return (longName(index) ?: longName(1) ?: longName(0))?.replace('\n', ' ')
     }
 
     /** Banner titles are "Name\nSubtitle\nPublisher"; use the phone's language when the game has it. */
