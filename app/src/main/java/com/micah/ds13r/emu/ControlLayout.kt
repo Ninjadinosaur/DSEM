@@ -128,11 +128,11 @@ object ControlLayouts {
     /** 3DS landscape: the image sits in the middle, controls on either side of it. */
     fun threeDsLandscape(): List<ControlSpec> = listOf(
         ControlSpec(ControlId.L.name, 0.06f, 0.08f, 56f),
-        ControlSpec(ControlId.ZL.name, 0.16f, 0.08f, 44f),
+        ControlSpec(ControlId.ZL.name, 0.18f, 0.08f, 44f),
         ControlSpec(ControlId.R.name, 0.94f, 0.08f, 56f),
-        ControlSpec(ControlId.ZR.name, 0.84f, 0.08f, 44f),
-        ControlSpec(ControlId.CIRCLE_PAD.name, 0.11f, 0.40f, 120f),
-        ControlSpec(ControlId.DPAD.name, 0.11f, 0.76f, 100f),
+        ControlSpec(ControlId.ZR.name, 0.82f, 0.08f, 44f),
+        ControlSpec(ControlId.CIRCLE_PAD.name, 0.11f, 0.36f, 116f),
+        ControlSpec(ControlId.DPAD.name, 0.11f, 0.68f, 92f),
         ControlSpec(ControlId.A.name, 0.955f, 0.48f, 56f),
         ControlSpec(ControlId.B.name, 0.905f, 0.64f, 56f),
         ControlSpec(ControlId.X.name, 0.905f, 0.32f, 56f),
