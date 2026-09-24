@@ -1,6 +1,7 @@
 package com.micah.ds13r.emu
 
 import android.Manifest
+import android.app.GameManager
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
@@ -18,6 +19,7 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.provider.MediaStore
+import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.SurfaceHolder
@@ -304,9 +306,27 @@ class EmulationActivity : ComponentActivity(),
         super.onResume()
         resumed = true
         resumeTime = System.currentTimeMillis()
+        logGameMode()
         if (settings.bool("emu.lidOnBackground")) NativeBridge.nativeSetLidClosed(false)
         if (loaded && !ui.menuOpen.value) NativeBridge.nativeSetPaused(false)
         registerSensors()
+    }
+
+    /**
+     * The phone's game mode for DS13R (chosen in OnePlus Games or with `adb shell cmd game mode`).
+     * Performance mode is where the phone lifts its CPU/GPU caps; Android asks apps to re-read it
+     * on every resume.
+     */
+    private fun logGameMode() {
+        val mode = getSystemService(GameManager::class.java)?.gameMode ?: return
+        val name = when (mode) {
+            GameManager.GAME_MODE_PERFORMANCE -> "performance"
+            GameManager.GAME_MODE_BATTERY -> "battery"
+            GameManager.GAME_MODE_STANDARD -> "standard"
+            GameManager.GAME_MODE_UNSUPPORTED -> "unsupported"
+            else -> "custom ($mode)"
+        }
+        Log.i("DS13R", "Game mode: $name")
     }
 
     /**

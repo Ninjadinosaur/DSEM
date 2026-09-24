@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Lets the phone offer Performance and Battery modes for DS13R (Game Dashboard / OnePlus Games).
+     We read the chosen mode in EmulationActivity; the phone applies its own CPU/GPU boost. -->
+<game-mode-config xmlns:android="http://schemas.android.com/apk/res/android"
+    android:supportsBatteryGameMode="true"
+    android:supportsPerformanceGameMode="true" />
