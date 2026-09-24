@@ -35,6 +35,7 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Shortcut
@@ -70,6 +71,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -131,6 +133,10 @@ fun LibraryScreen(
             }
     }
     val recent = remember(games) { games.filter { it.lastPlayed > 0 }.sortedByDescending { it.lastPlayed }.take(8) }
+    // Lazy rows stay anchored on the first visible item's key, so a game that moves to the front
+    // would sit just off-screen to the left: bring the row back to the newest game.
+    val recentState = rememberLazyListState()
+    LaunchedEffect(recent.firstOrNull()?.uri) { recentState.scrollToItem(0) }
 
     Scaffold(
         topBar = {
@@ -195,7 +201,7 @@ fun LibraryScreen(
                         Column {
                             Text("Continue playing", style = MaterialTheme.typography.titleMedium)
                             Spacer(Modifier.height(8.dp))
-                            LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            LazyRow(state = recentState, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                 items(recent, key = { "r" + it.uri }) { g ->
                                     GameCard(g, Modifier.width(112.dp), onClick = { launch(context, g) }, onLongClick = { sheetGame = g })
                                 }

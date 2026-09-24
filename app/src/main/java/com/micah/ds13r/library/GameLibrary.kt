@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -79,6 +80,7 @@ class GameLibrary(private val context: Context) {
         }
     }
 
+    @Synchronized
     private fun persist() {
         val tmp = File(stateFile.path + ".tmp")
         tmp.writeText(json.encodeToString(LibraryState.serializer(), LibraryState(_folders.value, _games.value)))
@@ -123,7 +125,13 @@ class GameLibrary(private val context: Context) {
                     }
                 }
             }
-            _games.value = found.sortedBy { it.title.lowercase(Locale.ROOT) }
+            // A game may have been played or favourited while we scanned: keep those changes.
+            _games.update { current ->
+                val latest = current.associateBy { it.uri }
+                found.map { g ->
+                    latest[g.uri]?.let { c -> g.copy(favorite = c.favorite, lastPlayed = c.lastPlayed, playTimeSeconds = c.playTimeSeconds) } ?: g
+                }.sortedBy { it.title.lowercase(Locale.ROOT) }
+            }
             persist()
         } finally {
             _scanning.value = false
@@ -286,7 +294,7 @@ class GameLibrary(private val context: Context) {
     fun find(uri: String): Game? = _games.value.firstOrNull { it.uri == uri }
 
     fun update(uri: String, change: (Game) -> Game) {
-        _games.value = _games.value.map { if (it.uri == uri) change(it) else it }
+        _games.update { list -> list.map { if (it.uri == uri) change(it) else it } }
         persist()
     }
 
