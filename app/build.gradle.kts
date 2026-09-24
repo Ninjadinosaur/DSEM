@@ -113,7 +113,13 @@ val patchAzahar = tasks.register("patchAzahar") {
 val configureAzahar = tasks.register<Exec>("configureAzahar") {
     description = "Configures the Azahar (3DS) libretro core for arm64 Android."
     dependsOn(patchAzahar)
-    onlyIf { !File(azaharBuild, "build.ninja").exists() }
+    // Also re-configure when a patch changed: Azahar hashes its shader generator sources only at
+    // configure time (GenerateSCMRev), and that hash is what makes old shader caches regenerate.
+    onlyIf {
+        val scmRev = File(azaharBuild, "src/common/scm_rev.cpp")
+        val newestPatch = azaharPatches.listFiles { f -> f.extension == "patch" }?.maxOfOrNull { it.lastModified() } ?: 0L
+        !File(azaharBuild, "build.ninja").exists() || !scmRev.exists() || newestPatch > scmRev.lastModified()
+    }
     doFirst { azaharBuild.mkdirs() }
     commandLine(
         cmakeExe, "-G", "Ninja", "-DCMAKE_MAKE_PROGRAM=$ninjaExe",

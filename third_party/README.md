@@ -52,6 +52,16 @@ Our fixes are kept as patch files in `app/src/main/azahar/patches/`; the Gradle 
 5. `0005-libretro-log-level-warning.patch`, `citra_libretro.cpp`: the libretro frontend hardcodes
    its log filter to Debug, so every debug line (thousands per save state) was formatted and sent
    to our log, pushing out earlier entries. It now logs warnings and errors only.
+6. `0006-sanitize-mul-per-component.patch`, `glsl_shader_decompiler.cpp`: `sanitize_mul` (PICA's
+   0 * inf = 0) is decided per component with a branch instead of nested `mix(..., isnan())`
+   vector selects. Adreno's Vulkan compiler fails to link some programs using the vector form
+   (Pokemon X crashed about 7 s after loading once such a program was in its shader cache).
+   Isolated on the 13R: the same shader pair links with this form and fails with any vector
+   select on the result.
+
+Azahar only hashes its shader-generator sources when it is configured, and that hash is what makes
+old shader caches regenerate. The `configureAzahar` Gradle task therefore re-runs whenever a patch
+is newer than the generated `scm_rev.cpp`, so a patch like 0006 also clears players' stale caches.
 
 The host also disables Azahar's ARM64 shader JIT (used only for CPU vertex shading): it mirrored
 and garbled geometry in Pokemon X, while the interpreter rendered the same save state correctly.

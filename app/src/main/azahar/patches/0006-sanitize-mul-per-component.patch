@@ -1,0 +1,27 @@
+diff --git a/src/video_core/shader/generator/glsl_shader_decompiler.cpp b/src/video_core/shader/generator/glsl_shader_decompiler.cpp
+--- a/src/video_core/shader/generator/glsl_shader_decompiler.cpp
++++ b/src/video_core/shader/generator/glsl_shader_decompiler.cpp
+@@ -832,9 +832,21 @@ private:
+         if (sanitize_mul) {
+             shader.AddLine("vec4 sanitize_mul(vec4 lhs, vec4 rhs) {{");
+             ++shader.scope;
++            // PICA: 0 * inf = 0 (a NaN product whose inputs weren't NaN becomes 0). Decided per
++            // component with a plain branch: Adreno's Vulkan compiler fails to link programs
++            // where this is a vector select on isnan() (nested mix(..., bvec4)), e.g. Pokemon X's
++            // title-screen vertex shaders (verified on the 13R with the same shader pair).
+             shader.AddLine("vec4 product = lhs * rhs;");
+-            shader.AddLine("return mix(product, mix(mix(vec4(0.0), product, isnan(rhs)), product, "
+-                           "isnan(lhs)), isnan(product));");
++            shader.AddLine("for (int i = 0; i < 4; ++i) {{");
++            ++shader.scope;
++            shader.AddLine("if (isnan(product[i]) && !isnan(lhs[i]) && !isnan(rhs[i])) {{");
++            ++shader.scope;
++            shader.AddLine("product[i] = 0.0;");
++            --shader.scope;
++            shader.AddLine("}}");
++            --shader.scope;
++            shader.AddLine("}}");
++            shader.AddLine("return product;");
+             --shader.scope;
+             shader.AddLine("}}\n");
+         }
