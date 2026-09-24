@@ -39,7 +39,7 @@ public:
     void MakeCurrent();
 
     // Reads back one screen of the current frame as RGBA8888 (for screenshots).
-    bool ReadScreen(int screen, std::vector<uint32_t>& out, int& width, int& height);
+    bool ReadScreen(int screen, std::vector<uint32_t>& out, int& width, int& height) override;
 
 private:
     bool CreateProgram();

@@ -70,6 +70,9 @@ public:
     // Target presentation rate: 60 Hz during play, up to 120 Hz while fast-forwarding,
     // 0 = no preference (paused, so menus can use the panel's full 120 Hz).
     virtual void SetTargetRefreshRate(float hz) = 0;
+
+    // One screen of the current frame as RGBA8888 (for screenshots and state thumbnails).
+    virtual bool ReadScreen(int screen, std::vector<uint32_t>& out, int& width, int& height) = 0;
 };
 
 }

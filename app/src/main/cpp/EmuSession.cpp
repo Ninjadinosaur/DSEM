@@ -4,6 +4,8 @@
 #include "GLPresenter.h"
 #include "GbaCore.h"
 #include "ThreeDsCore.h"
+#include "VulkanContext.h"
+#include "VulkanPresenter.h"
 #include "IoWorker.h"
 #include "LogBuffer.h"
 #include "PerfManager.h"
@@ -216,6 +218,7 @@ void EmuSession::SwapCore(std::unique_ptr<EmuCore> next)
     audioSkew = 1.0;
     fillAverage = -1.0;
     if (core) audio.SetSource(core.get());
+    UpdateOutput();
 }
 
 void EmuSession::ClearRewind()
@@ -371,34 +374,96 @@ void EmuSession::FlushSaves()
     }, true);
 }
 
-void EmuSession::SetSurface(ANativeWindow* window)
+void EmuSession::SetSurface(ANativeWindow* newWindow)
 {
-    Post([this, window] {
+    Post([this, newWindow] {
         if (!presenter) return;
+        Output()->ReleaseWindow();
+        if (window) ANativeWindow_release(window);
+        window = newWindow;
         if (window)
         {
-            presenter->SetWindow(window);
+            ANativeWindow_acquire(window);
+            Output()->SetWindow(window);
             needRedraw = true;
-        }
-        else
-        {
-            presenter->ReleaseWindow();
         }
     }, true);
 }
 
+VulkanContext* EmuSession::Vulkan()
+{
+    if (!vulkan)
+    {
+        vulkan = std::make_unique<VulkanContext>();
+        if (!vulkan->Init(filesDir))
+        {
+            LOGE("Vulkan is unavailable on this device");
+            vulkan.reset();
+            vulkanFailed = true;
+        }
+    }
+    return vulkan.get();
+}
+
+ds13r::Presenter* EmuSession::Output()
+{
+    if (vulkanOutput && vkPresenter) return vkPresenter.get();
+    return presenter.get();
+}
+
+// Emulation thread. Chooses the presenter for the running game and hands it the window:
+// Vulkan for DS games on the Vulkan renderer, OpenGL ES for everything else. A window can
+// only belong to one graphics API at a time, so the other presenter lets go of it first.
+void EmuSession::UpdateOutput()
+{
+    bool want = dsCore && config.GetInt("video.renderer", 1) == 3;
+    if (want && !vkPresenter && !vulkanFailed && Vulkan())
+    {
+        vkPresenter = std::make_unique<VulkanPresenter>(*vulkan, vm, activity);
+        if (vkPresenter->Init())
+        {
+            vkPresenter->SetLayout(lastLayout);
+            vkPresenter->SetSettings(lastSettings);
+        }
+        else
+        {
+            LOGE("Vulkan presenter failed; staying on OpenGL ES output");
+            vkPresenter.reset();
+            vulkanFailed = true;
+        }
+    }
+    if (want && !vkPresenter) want = false;
+    if (want == vulkanOutput) return;
+
+    Output()->ReleaseWindow();
+    vulkanOutput = want;
+    LOGI("Output: %s", vulkanOutput ? "Vulkan" : "OpenGL ES");
+    if (window)
+    {
+        Output()->SetWindow(window);
+        Output()->SetTargetRefreshRate(currentRefresh);
+        needRedraw = true;
+    }
+}
+
 void EmuSession::SetLayout(const PresentLayout& layout)
 {
-    if (presenter) presenter->SetLayout(layout);
-    needRedraw = true;
-    cmdCv.notify_all();
+    Post([this, layout] {
+        lastLayout = layout;
+        if (presenter) presenter->SetLayout(layout);
+        if (vkPresenter) vkPresenter->SetLayout(layout);
+        needRedraw = true;
+    }, false);
 }
 
 void EmuSession::SetPresentSettings(const PresentSettings& settings)
 {
-    if (presenter) presenter->SetSettings(settings);
-    needRedraw = true;
-    cmdCv.notify_all();
+    Post([this, settings] {
+        lastSettings = settings;
+        if (presenter) presenter->SetSettings(settings);
+        if (vkPresenter) vkPresenter->SetSettings(settings);
+        needRedraw = true;
+    }, false);
 }
 
 void EmuSession::SetKeys(uint32_t pressedMask)
@@ -612,7 +677,7 @@ bool EmuSession::Screenshot(std::vector<uint32_t>& pixels, int& width, int& heig
         for (int i = 0; i < screens; i++)
         {
             std::vector<uint32_t> one;
-            if (!presenter->ReadScreen(i, one, width, height)) return;
+            if (!Output()->ReadScreen(i, one, width, height)) return;
             pixels.insert(pixels.end(), one.begin(), one.end());
         }
         ok = true;
@@ -633,6 +698,7 @@ void EmuSession::ApplyLiveSettings()
         audio.SetVolume((float)config.GetFloat("audio.volume", 1.0));
         audio.SetExtraLatencyMs((int)config.GetInt("audio.extraLatencyMs", 0));
         if (core) core->ApplySettings();
+        UpdateOutput();
         needRedraw = true;
     }, true);
 }
@@ -678,12 +744,14 @@ void EmuSession::PresentFrame()
     FrameInfo frame;
     if (core && core->GetFrame(frame))
     {
-        if (frame.hardware)
+        if (frame.vkTexture && vulkanOutput)
+            vkPresenter->SetExternalFrame(frame.vkTexture, frame.width, frame.height, frame.screenCount);
+        else if (frame.hardware)
             presenter->SetHardwareFrame(frame.texture, frame.width, frame.height);
         else
-            presenter->UploadSoftwareFrame(frame.screens, frame.screenCount, frame.width, frame.height, frame.bgra);
+            Output()->UploadSoftwareFrame(frame.screens, frame.screenCount, frame.width, frame.height, frame.bgra);
     }
-    if (presenter->Present()) statPresents++;
+    if (Output()->Present()) statPresents++;
 }
 
 void EmuSession::UpdateAudioSync(double emulatedFps)
@@ -785,19 +853,19 @@ void EmuSession::ThreadMain()
             if (active)
             {
                 audio.StartOutput();
-                presenter->SetTargetRefreshRate(currentRefresh);
+                Output()->SetTargetRefreshRate(currentRefresh);
             }
             else
             {
                 if (paused) audio.StopOutput(); // release the audio path while paused
                 // No frame-rate preference while paused, so menus can run at 120 Hz.
-                presenter->SetTargetRefreshRate(0.0f);
+                Output()->SetTargetRefreshRate(0.0f);
             }
         }
 
         if (!active)
         {
-            if (needRedraw.exchange(false) && presenter->HasWindow()) PresentFrame();
+            if (needRedraw.exchange(false) && Output()->HasWindow()) PresentFrame();
             std::unique_lock<std::mutex> l(cmdLock);
             cmdCv.wait_for(l, std::chrono::milliseconds(100), [this] {
                 return !commands.empty() || quit || (running && !paused) || frameStep || needRedraw;
@@ -811,7 +879,7 @@ void EmuSession::ThreadMain()
         if (wantRefresh != currentRefresh)
         {
             currentRefresh = wantRefresh;
-            presenter->SetTargetRefreshRate(currentRefresh);
+            Output()->SetTargetRefreshRate(currentRefresh);
         }
 
         int frames = 0;
@@ -865,7 +933,7 @@ void EmuSession::ThreadMain()
         bool muteFf = mode == SpeedMode::FastForward && config.GetBool("audio.muteFastForward", true);
         audio.SetMuted(muteFf || rewinding.load());
 
-        if (presenter->HasWindow())
+        if (Output()->HasWindow())
         {
             PresentFrame(); // Swappy blocks here until the next vsync slot
         }
@@ -906,8 +974,12 @@ void EmuSession::ThreadMain()
     }
 
     SwapCore(nullptr);
+    vkPresenter.reset();
+    vulkan.reset(); // after the core: the DS Vulkan renderer uses it
     presenter->Shutdown();
     presenter.reset();
+    if (window) ANativeWindow_release(window);
+    window = nullptr;
     if (vm) vm->DetachCurrentThread();
 }
 

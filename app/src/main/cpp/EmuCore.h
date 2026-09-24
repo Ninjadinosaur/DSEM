@@ -14,6 +14,7 @@ namespace ds13r
 
 class ConfigStore;
 class GLPresenter;
+class VulkanContext;
 
 // Pulled by the audio thread; stereo 16-bit at 48 kHz.
 class AudioSource
@@ -31,6 +32,8 @@ public:
     virtual ConfigStore& Config() = 0;
     virtual const std::string& FilesDir() const = 0;
     virtual GLPresenter* Presenter() = 0;
+    // The shared Vulkan device (created on first use); null if Vulkan is unavailable.
+    virtual VulkanContext* Vulkan() = 0;
     virtual void OnMicStart() = 0;
     virtual void OnMicStop() = 0;
     virtual int ReadMic(int16_t* data, int maxlen) = 0;
@@ -68,7 +71,8 @@ constexpr uint32_t kKeyHome = 1u << 14;
 // Where the current frame's pixels are.
 struct FrameInfo
 {
-    bool hardware = false;         // true: `texture` is a GL texture array with one layer per screen
+    bool hardware = false;         // true: `texture` (GL) or `vkTexture` is an array, one layer per screen
+    void* vkTexture = nullptr;     // ds13r::vk::Texture* from the Vulkan renderer
     const void* screens[2] = {};   // software: 32-bit pixels per screen
     unsigned texture = 0;
     int width = 0, height = 0;     // one screen, in pixels

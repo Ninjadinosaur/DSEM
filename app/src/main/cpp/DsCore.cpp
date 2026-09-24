@@ -1,4 +1,5 @@
 #include "DsCore.h"
+#include "vk/GPU_Vulkan.h"
 #include "ConfigStore.h"
 #include "GLPresenter.h"
 #include "IoWorker.h"
@@ -268,9 +269,16 @@ void DsCore::ApplySettings()
     int want = (int)config.GetInt("video.renderer", 1);
     if (want != activeRenderer)
     {
+        if (want == 3 && !host.Vulkan())
+            want = 1; // no Vulkan: fall back to OpenGL ES
         if (want == 0)
         {
             nds->SetRenderer(std::make_unique<SoftRenderer>(*nds));
+        }
+        else if (want == 3)
+        {
+            // Vulkan: 2D layers, sprites, compositing and capture on the GPU (3D: phase 3).
+            nds->SetRenderer(std::make_unique<VulkanRenderer>(*nds, *host.Vulkan()));
         }
         else
         {
@@ -278,7 +286,8 @@ void DsCore::ApplySettings()
             nds->SetRenderer(std::make_unique<GLRenderer>(*nds, want == 2));
         }
         activeRenderer = want;
-        LOGI("DS renderer: %s", want == 0 ? "software" : want == 1 ? "OpenGL ES" : "OpenGL ES compute");
+        LOGI("DS renderer: %s", want == 0 ? "software" : want == 1 ? "OpenGL ES" : want == 2 ? "OpenGL ES compute"
+                                                                           : "Vulkan");
     }
 
     RendererSettings rs {};
@@ -455,6 +464,13 @@ bool DsCore::GetFrame(FrameInfo& out)
     // Hardware renderer: a 2-layer texture array (top, bottom) at the upscaled size.
     int scale = RenderScale();
     out.hardware = true;
+    if (activeRenderer == 3)
+    {
+        out.vkTexture = top;
+        out.width = 256 * scale;
+        out.height = 192 * scale;
+        return true;
+    }
     out.texture = *static_cast<GLuint*>(top);
     out.width = 256 * scale;
     out.height = 192 * scale;

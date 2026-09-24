@@ -25,6 +25,8 @@ namespace ds13r
 
 class DsCore;
 class GLPresenter;
+class VulkanContext;
+class VulkanPresenter;
 class PerfManager;
 
 // Callbacks from native code up to the Kotlin layer.
@@ -127,6 +129,7 @@ public:
     ConfigStore& Config() override { return config; }
     const std::string& FilesDir() const override { return filesDir; }
     GLPresenter* Presenter() override { return presenter.get(); }
+    VulkanContext* Vulkan() override;
     void OnMicStart() override;
     void OnMicStop() override;
     int ReadMic(int16_t* data, int maxlen) override;
@@ -173,7 +176,18 @@ private:
     std::unique_ptr<EmuCore> core;
     DsCore* dsCore = nullptr; // same object as `core` while a DS game runs
 
-    std::unique_ptr<GLPresenter> presenter;
+    std::unique_ptr<GLPresenter> presenter;  // always exists: owns the GL context the GL renderers and 3DS use
+    // Vulkan output (DS games on the Vulkan renderer). Created the first time it is needed.
+    std::unique_ptr<VulkanContext> vulkan;
+    std::unique_ptr<VulkanPresenter> vkPresenter;
+    bool vulkanOutput = false;
+    bool vulkanFailed = false;               // don't retry every frame
+    ANativeWindow* window = nullptr;         // our reference to the current surface, if any
+    PresentLayout lastLayout;                // so a newly created presenter starts up to date
+    PresentSettings lastSettings;
+    // The presenter currently drawing to the window.
+    ds13r::Presenter* Output();
+    void UpdateOutput();
     std::atomic<bool> needRedraw {false};
 
     AudioEngine audio;

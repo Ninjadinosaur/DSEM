@@ -60,7 +60,7 @@ private:
     CoreHost& host;
     std::unique_ptr<melonDS::NDS> nds;
     int consoleType = 0;
-    int activeRenderer = 0; // 0 software, 1 OpenGL ES, 2 OpenGL ES compute
+    int activeRenderer = 0; // 0 software, 1 OpenGL ES, 2 OpenGL ES compute, 3 Vulkan
     std::string romName;
     std::string gameKey;
 

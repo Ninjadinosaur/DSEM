@@ -52,3 +52,8 @@ Our fixes are kept as patch files in `app/src/main/azahar/patches/`; the Gradle 
 
 The host also disables Azahar's ARM64 shader JIT (used only for CPU vertex shading): it mirrored
 and garbled geometry in Pokemon X, while the interpreter rendered the same save state correctly.
+
+## Vulkan Memory Allocator (third_party/vma, v3.4.0)
+
+`vk_mem_alloc.h` from GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator, MIT licence (LICENSE.txt),
+unmodified. Used by the Vulkan presenter and the DS Vulkan renderer.

@@ -9,6 +9,7 @@ set(THIRD_PARTY "${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party")
 set(MELONDS_DIR "${THIRD_PARTY}/melonDS")
 set(MGBA_DIR "${THIRD_PARTY}/mgba")
 set(LZ4_DIR "${THIRD_PARTY}/lz4")
+set(VMA_DIR "${THIRD_PARTY}/vma")
 # Azahar (3DS) is built separately by Gradle into its own library; we only need the libretro API header.
 set(LIBRETRO_INCLUDE "${THIRD_PARTY}/azahar/externals/libretro-common/libretro-common/include")
 
@@ -68,15 +69,54 @@ add_library(ds13r SHARED
     RewindBuffer.cpp
     SaveFile.cpp
     ThreeDsCore.cpp
+    VulkanContext.cpp
+    VulkanPresenter.cpp
+    vk/VkStream.cpp
+    vk/GPU_Vulkan.cpp
+    vk/GPU2D_Vulkan.cpp
     "${LZ4_DIR}/lz4.c"
 )
 
 target_include_directories(ds13r PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 # Vendored third-party headers: included as system headers so our stricter warnings only
 # apply to our own code.
-target_include_directories(ds13r SYSTEM PRIVATE "${MELONDS_DIR}/src" "${LZ4_DIR}" "${LIBRETRO_INCLUDE}")
+target_include_directories(ds13r SYSTEM PRIVATE "${MELONDS_DIR}/src" "${LZ4_DIR}" "${LIBRETRO_INCLUDE}" "${VMA_DIR}")
+
+# Vulkan shaders: GLSL in shaders/ compiled to SPIR-V by the NDK's glslc, emitted as C number
+# lists that the sources #include.
+if(CMAKE_HOST_WIN32)
+    set(GLSLC "${ANDROID_NDK}/shader-tools/windows-x86_64/glslc.exe")
+elseif(CMAKE_HOST_APPLE)
+    set(GLSLC "${ANDROID_NDK}/shader-tools/darwin-x86_64/glslc")
+else()
+    set(GLSLC "${ANDROID_NDK}/shader-tools/linux-x86_64/glslc")
+endif()
+set(SHADER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
+set(SHADER_OUT "${CMAKE_CURRENT_BINARY_DIR}/shaders")
+file(GLOB_RECURSE VULKAN_SHADERS CONFIGURE_DEPENDS "${SHADER_DIR}/*.vert" "${SHADER_DIR}/*.frag" "${SHADER_DIR}/*.comp")
+file(GLOB_RECURSE VULKAN_SHADER_INCLUDES CONFIGURE_DEPENDS "${SHADER_DIR}/*.glsl")
+set(SPIRV_OUTPUTS "")
+foreach(src ${VULKAN_SHADERS})
+    get_filename_component(name ${src} NAME)
+    set(out "${SHADER_OUT}/${name}.inc")
+    add_custom_command(
+        OUTPUT ${out}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADER_OUT}
+        COMMAND ${GLSLC} --target-env=vulkan1.1 -O -Werror -mfmt=num -I ${SHADER_DIR} ${src} -o ${out}
+        DEPENDS ${src} ${VULKAN_SHADER_INCLUDES}
+        COMMENT "glslc ${name}"
+        VERBATIM)
+    list(APPEND SPIRV_OUTPUTS ${out})
+endforeach()
+add_custom_target(ds13r_shaders DEPENDS ${SPIRV_OUTPUTS})
+add_dependencies(ds13r ds13r_shaders)
+target_include_directories(ds13r PRIVATE ${SHADER_OUT})
 
 target_compile_options(ds13r PRIVATE -Wall -Wextra -Wno-unused-parameter -fwrapv)
+# Vulkan code uses the standard `VkFooInfo info {VK_STRUCTURE_TYPE_FOO};` idiom, which zeroes
+# every other field on purpose; -Wextra would flag each one.
+set_source_files_properties(VulkanContext.cpp VulkanPresenter.cpp vk/VkStream.cpp vk/GPU_Vulkan.cpp vk/GPU2D_Vulkan.cpp PROPERTIES
+    COMPILE_OPTIONS "-Wno-missing-field-initializers")
 
 target_link_libraries(ds13r
     core
@@ -88,4 +128,5 @@ target_link_libraries(ds13r
     log
     EGL
     GLESv3
+    vulkan
 )
