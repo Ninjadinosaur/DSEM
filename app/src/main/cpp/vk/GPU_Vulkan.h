@@ -8,6 +8,7 @@
 #include "GPU.h"
 #include "GPU3D.h"
 #include "GPU2D_Vulkan.h"
+#include "GPU3D_Vulkan.h"
 #include "VkStream.h"
 
 #include <memory>
@@ -27,24 +28,6 @@ struct VulkanPrograms
     };
     Program LayerPre, SpritePre, Compositor, FinalPass, Capture, CapDown;
     Program Sprite[3]; // 0 mosaic pass, 1 window pass, 2 main pass (share set/layout)
-};
-
-// The 3D layer for phase 2 of the Vulkan port: a transparent image the compositor can sample.
-// Replaced by the Vulkan compute 3D renderer.
-class VulkanNull3D : public Renderer3D
-{
-public:
-    VulkanNull3D(melonDS::GPU3D& gpu3D, VulkanRenderer& parent);
-    ~VulkanNull3D() override;
-    void Reset() override {}
-    void RenderFrame() override {}
-    u32* GetLine(int line) override { return nullptr; }
-    void SetScaleFactor(int scale);
-
-private:
-    VulkanRenderer& Parent;
-    ds13r::vk::Texture Output;
-    int Scale = 0;
 };
 
 class VulkanRenderer : public Renderer
@@ -77,7 +60,7 @@ public:
 
 private:
     friend class VulkanRenderer2D;
-    friend class VulkanNull3D;
+    friend class VulkanCompute3D;
 
     ds13r::VulkanContext& VK;
     ds13r::vk::Stream S;

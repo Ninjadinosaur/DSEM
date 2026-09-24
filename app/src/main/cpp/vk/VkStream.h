@@ -47,6 +47,7 @@ struct TextureDesc
     bool renderTarget = false;
     bool depth = false;
     bool transferSrc = false;  // read back to the CPU
+    bool storage = false;      // written by compute shaders (storage image)
     VkComponentMapping swizzle {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
                                 VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
 };
@@ -127,6 +128,15 @@ public:
     void Use(Texture& t, VkImageLayout layout, VkPipelineStageFlags stage, VkAccessFlags access, bool write);
 
     VkCommandBuffer Cmd();
+
+    // ---- buffers and compute (for the compute 3D renderer)
+    // Copies data into a device buffer after all earlier GPU work on it; later compute reads see it.
+    void UploadBuffer(VkBuffer dst, VkDeviceSize offset, const void* data, VkDeviceSize size);
+    // A global memory barrier (ends the render pass if one is open).
+    void MemoryBarrier(VkPipelineStageFlags srcStage, VkAccessFlags srcAccess,
+                       VkPipelineStageFlags dstStage, VkAccessFlags dstAccess);
+    // A descriptor set from this frame's pool (the caller writes it).
+    VkDescriptorSet AllocateDescriptorSet(VkDescriptorSetLayout layout);
 
 private:
     struct FrameSlot

@@ -227,6 +227,7 @@ bool Stream::CreateTexture(Texture& t, const TextureDesc& d)
     ci.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     if (d.renderTarget) ci.usage |= d.depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     if (d.transferSrc) ci.usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    if (d.storage) ci.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
     VmaAllocationCreateInfo ai {};
     ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
     if (vmaCreateImage(vk.Allocator(), &ci, &ai, &t.image, &t.allocation, nullptr) != VK_SUCCESS)
@@ -638,6 +639,42 @@ void Stream::Draw(VkPipeline pipeline, VkPipelineLayout layout, VkDescriptorSetL
         vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, pushSize, pushConstants);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
     vkCmdDraw(cmd, vertexCount, 1, 0, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Buffers and compute
+
+void Stream::MemoryBarrier(VkPipelineStageFlags srcStage, VkAccessFlags srcAccess,
+                           VkPipelineStageFlags dstStage, VkAccessFlags dstAccess)
+{
+    EndRendering();
+    VkMemoryBarrier mb {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    mb.srcAccessMask = srcAccess;
+    mb.dstAccessMask = dstAccess;
+    vkCmdPipelineBarrier(Cmd(), srcStage, dstStage, 0, 1, &mb, 0, nullptr, 0, nullptr);
+}
+
+void Stream::UploadBuffer(VkBuffer dst, VkDeviceSize offset, const void* data, VkDeviceSize size)
+{
+    if (size == 0) return;
+    void* mapped = nullptr;
+    VkDeviceSize src = Allocate(size, 16, &mapped);
+    memcpy(mapped, data, size);
+    // Earlier shader reads/writes of the buffer must finish before it is overwritten.
+    MemoryBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                  VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+    VkBufferCopy c {src, offset, size};
+    vkCmdCopyBuffer(Cmd(), Slot().ring.buffer, dst, 1, &c);
+    MemoryBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                  VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_UNIFORM_READ_BIT);
+}
+
+VkDescriptorSet Stream::AllocateDescriptorSet(VkDescriptorSetLayout layout)
+{
+    EndRendering();
+    return AllocateSet(layout);
 }
 
 // ---------------------------------------------------------------------------

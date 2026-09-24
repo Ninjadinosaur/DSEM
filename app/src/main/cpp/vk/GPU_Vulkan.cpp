@@ -89,30 +89,6 @@ TextureDesc Target(uint32_t w, uint32_t h, uint32_t layers, bool array, bool tra
 }
 
 // ---------------------------------------------------------------------------
-// Placeholder 3D layer (phase 2)
-
-VulkanNull3D::VulkanNull3D(melonDS::GPU3D& gpu3D, VulkanRenderer& parent) : Renderer3D(gpu3D), Parent(parent)
-{
-}
-
-VulkanNull3D::~VulkanNull3D()
-{
-    Parent.S.DestroyTexture(Output);
-}
-
-void VulkanNull3D::SetScaleFactor(int scale)
-{
-    if (scale == Scale) return;
-    Scale = scale;
-    Parent.S.CreateTexture(Output, Target(256 * scale, 192 * scale, 1, false));
-    // Fully transparent: the compositor shows the 2D layers through it.
-    Parent.S.BeginRendering({{&Output, 0}});
-    Parent.S.ClearColor(0, 0, 0, 0, 0);
-    Parent.S.EndRendering();
-    Parent.OutputTex3D = &Output;
-}
-
-// ---------------------------------------------------------------------------
 
 VulkanRenderer::VulkanRenderer(melonDS::NDS& nds, ds13r::VulkanContext& vk)
     : Renderer(nds.GPU), VK(vk), S(vk)
@@ -124,7 +100,7 @@ VulkanRenderer::VulkanRenderer(melonDS::NDS& nds, ds13r::VulkanContext& vk)
 
     Rend2D_A = std::make_unique<VulkanRenderer2D>(GPU.GPU2D_A, *this);
     Rend2D_B = std::make_unique<VulkanRenderer2D>(GPU.GPU2D_B, *this);
-    Rend3D = std::make_unique<VulkanNull3D>(GPU.GPU3D, *this);
+    Rend3D = std::make_unique<VulkanCompute3D>(GPU.GPU3D, *this);
 
     ScaleFactor = 0;
     ScreenW = ScreenH = 0;
@@ -396,7 +372,7 @@ void VulkanRenderer::SetRenderSettings(RendererSettings& settings)
     SetScaleFactor(settings.ScaleFactor);
     static_cast<VulkanRenderer2D*>(Rend2D_A.get())->SetScaleFactor(settings.ScaleFactor);
     static_cast<VulkanRenderer2D*>(Rend2D_B.get())->SetScaleFactor(settings.ScaleFactor);
-    static_cast<VulkanNull3D*>(Rend3D.get())->SetScaleFactor(settings.ScaleFactor);
+    static_cast<VulkanCompute3D*>(Rend3D.get())->SetRenderSettings(settings.ScaleFactor, settings.HiresCoordinates);
 }
 
 void VulkanRenderer::SetScaleFactor(int scale)
