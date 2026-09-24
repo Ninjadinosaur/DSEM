@@ -4,6 +4,7 @@
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -39,6 +40,14 @@ public:
     // Writes the pipeline cache to disk (after new pipelines were created).
     void SavePipelineCache();
 
+    // The queue is shared with the 3DS engine, which may submit from its own thread: every
+    // submit/present/wait-idle on it must hold this lock (Vulkan requires external sync).
+    void LockQueue() { queueLock.lock(); }
+    void UnlockQueue() { queueLock.unlock(); }
+    VkResult Submit(const VkSubmitInfo& info, VkFence fence);
+    VkResult WaitIdle();
+    void DeviceWaitIdle();
+
     VkShaderModule CreateShaderModule(const uint32_t* code, size_t bytes) const;
 
     // Records and submits a short command buffer, and waits for it to finish.
@@ -64,6 +73,7 @@ private:
     VkCommandPool oncePool = VK_NULL_HANDLE;
     VkPhysicalDeviceProperties properties {};
     std::string cachePath;
+    std::recursive_mutex queueLock;
 };
 
 // An image plus its memory and a view.

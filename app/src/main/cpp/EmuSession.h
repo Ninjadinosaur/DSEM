@@ -130,6 +130,7 @@ public:
     const std::string& FilesDir() const override { return filesDir; }
     GLPresenter* Presenter() override { return presenter.get(); }
     VulkanContext* Vulkan() override;
+    VulkanPresenter* VulkanOutput() override;
     void OnMicStart() override;
     void OnMicStop() override;
     int ReadMic(int16_t* data, int maxlen) override;

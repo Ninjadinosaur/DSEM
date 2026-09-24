@@ -215,10 +215,11 @@ void VulkanPresenter::Shutdown()
 {
     if (!initialized) return;
     VkDevice dev = vk.Device();
-    vkDeviceWaitIdle(dev);
+    vk.DeviceWaitIdle();
     ReleaseWindow();
     for (Frame& f : frames)
     {
+        if (f.externalView) vkDestroyImageView(dev, f.externalView, nullptr);
         f.staging.Destroy(vk);
         f.texture.Destroy(vk);
         if (f.fence) vkDestroyFence(dev, f.fence, nullptr);
@@ -378,7 +379,7 @@ void VulkanPresenter::DestroySwapchain()
 {
     VkDevice dev = vk.Device();
     if (!swapchain) return;
-    vkDeviceWaitIdle(dev);
+    vk.DeviceWaitIdle();
     for (VkFramebuffer fb : framebuffers) vkDestroyFramebuffer(dev, fb, nullptr);
     for (VkImageView v : imageViews) vkDestroyImageView(dev, v, nullptr);
     for (VkSemaphore s : renderDone) vkDestroySemaphore(dev, s, nullptr);
@@ -431,6 +432,7 @@ void VulkanPresenter::UploadSoftwareFrame(const void* const* screens, int count,
     softVersion++;
     haveFrame = true;
     useExternal = false;
+    useExternalImage = false;
 }
 
 void VulkanPresenter::SetExternalFrame(void* texture, int width, int height, int layers)
@@ -440,7 +442,34 @@ void VulkanPresenter::SetExternalFrame(void* texture, int width, int height, int
     extHeight = height;
     extLayers = layers;
     useExternal = true;
+    useExternalImage = false;
     haveFrame = true;
+}
+
+void VulkanPresenter::SetExternalImage(VkImage image, VkFormat format, int width, int height)
+{
+    extImage = image;
+    extFormat = format;
+    extWidth = width;
+    extHeight = height;
+    extLayers = 1;
+    useExternalImage = true;
+    useExternal = false;
+    haveFrame = true;
+}
+
+void VulkanPresenter::DropExternalImage()
+{
+    if (!useExternalImage) return;
+    extImage = VK_NULL_HANDLE;
+    useExternalImage = false;
+    haveFrame = false;
+}
+
+void VulkanPresenter::WaitSlot(int slot)
+{
+    if (!initialized || slot < 0 || slot >= kFramesInFlight) return;
+    vkWaitForFences(vk.Device(), 1, &frames[slot].fence, VK_TRUE, UINT64_MAX);
 }
 
 void VulkanPresenter::BindView(Frame& f, VkImageView view)
@@ -542,7 +571,29 @@ bool VulkanPresenter::Present()
     bool drawScreens;
     int texW, texH, texLayers;
     bool swapRB;
-    if (useExternal && extTexture)
+    // This slot's GPU work is finished (fence waited above): its per-frame view can go.
+    if (f.externalView)
+    {
+        vkDestroyImageView(dev, f.externalView, nullptr);
+        f.externalView = VK_NULL_HANDLE;
+        f.boundView = VK_NULL_HANDLE;
+    }
+    if (useExternalImage && extImage)
+    {
+        VkImageViewCreateInfo vi {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        vi.image = extImage;
+        vi.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+        vi.format = extFormat;
+        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCreateImageView(dev, &vi, nullptr, &f.externalView);
+        BindView(f, f.externalView);
+        drawScreens = f.externalView != VK_NULL_HANDLE;
+        texW = extWidth;
+        texH = extHeight;
+        texLayers = 1;
+        swapRB = false;
+    }
+    else if (useExternal && extTexture)
     {
         BindView(f, static_cast<vk::Texture*>(extTexture)->view);
         drawScreens = true;
@@ -633,7 +684,7 @@ bool VulkanPresenter::Present()
     si.pCommandBuffers = &f.cmd;
     si.signalSemaphoreCount = 1;
     si.pSignalSemaphores = &renderDone[imageIndex];
-    r = vkQueueSubmit(vk.Queue(), 1, &si, f.fence);
+    r = vk.Submit(si, f.fence);
     if (r != VK_SUCCESS)
     {
         LOGE("Vulkan: submit failed (%s)", VkResultName(r));
@@ -646,7 +697,9 @@ bool VulkanPresenter::Present()
     pi.swapchainCount = 1;
     pi.pSwapchains = &swapchain;
     pi.pImageIndices = &imageIndex;
+    vk.LockQueue();
     r = swappyReady ? SwappyVk_queuePresent(vk.Queue(), &pi) : vkQueuePresentKHR(vk.Queue(), &pi);
+    vk.UnlockQueue();
     frameIndex = (frameIndex + 1) % kFramesInFlight;
     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR)
     {
@@ -673,6 +726,42 @@ void VulkanPresenter::SetTargetRefreshRate(float hz)
 
 bool VulkanPresenter::ReadScreen(int screen, std::vector<uint32_t>& out, int& width, int& height)
 {
+    if (useExternalImage && extImage)
+    {
+        // The 3DS engine's output (created with TRANSFER_SRC for libretro frontends).
+        if (screen != 0) return false;
+        width = extWidth;
+        height = extHeight;
+        size_t bytes = (size_t)width * height * 4;
+        VkBufferResource readback;
+        if (!readback.Create(vk, bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, true)) return false;
+        bool ok = vk.RunOnce([&](VkCommandBuffer cmd) {
+            TransitionImage(cmd, extImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_SHADER_READ_BIT,
+                            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT, 1);
+            VkBufferImageCopy c {};
+            c.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            c.imageExtent = {(uint32_t)width, (uint32_t)height, 1};
+            vkCmdCopyImageToBuffer(cmd, extImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback.buffer, 1, &c);
+            TransitionImage(cmd, extImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT, 1);
+        });
+        if (ok)
+        {
+            vmaInvalidateAllocation(vk.Allocator(), readback.allocation, 0, bytes);
+            out.resize((size_t)width * height);
+            memcpy(out.data(), readback.mapped, bytes);
+            bool bgra = extFormat == VK_FORMAT_B8G8R8A8_UNORM || extFormat == VK_FORMAT_B8G8R8A8_SRGB;
+            for (uint32_t& p : out)
+            {
+                if (bgra) p = (p & 0x0000FF00) | ((p >> 16) & 0xFF) | ((p & 0xFF) << 16);
+                p |= 0xFF000000;
+            }
+        }
+        readback.Destroy(vk);
+        return ok;
+    }
     if (useExternal && extTexture)
     {
         // Read the renderer's image back (kept in SHADER_READ_ONLY layout around the copy).

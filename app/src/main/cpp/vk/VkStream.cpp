@@ -28,7 +28,7 @@ Stream::~Stream()
 {
     VkDevice dev = vk.Device();
     if (!dev) return;
-    vkDeviceWaitIdle(dev);
+    vk.DeviceWaitIdle();
     for (FrameSlot& s : slots)
     {
         for (auto& f : s.deferredFrees) f();
@@ -131,7 +131,7 @@ void Stream::Flush(bool wait)
     FrameSlot& s = Slot();
     if (!s.recording)
     {
-        if (wait) vkQueueWaitIdle(vk.Queue());
+        if (wait) vk.WaitIdle();
         return;
     }
     EndRendering();
@@ -140,7 +140,7 @@ void Stream::Flush(bool wait)
     VkSubmitInfo si {VK_STRUCTURE_TYPE_SUBMIT_INFO};
     si.commandBufferCount = 1;
     si.pCommandBuffers = &s.cmd;
-    VkResult r = vkQueueSubmit(vk.Queue(), 1, &si, s.fence);
+    VkResult r = vk.Submit(si, s.fence);
     if (r != VK_SUCCESS) LOGE("Vulkan: renderer submit failed (%s)", VkResultName(r));
     s.recording = false;
     s.submitted = true;

@@ -15,6 +15,7 @@ namespace ds13r
 class ConfigStore;
 class GLPresenter;
 class VulkanContext;
+class VulkanPresenter;
 
 // Pulled by the audio thread; stereo 16-bit at 48 kHz.
 class AudioSource
@@ -34,6 +35,8 @@ public:
     virtual GLPresenter* Presenter() = 0;
     // The shared Vulkan device (created on first use); null if Vulkan is unavailable.
     virtual VulkanContext* Vulkan() = 0;
+    // The Vulkan presenter (created on first use, even before it owns the window).
+    virtual VulkanPresenter* VulkanOutput() = 0;
     virtual void OnMicStart() = 0;
     virtual void OnMicStop() = 0;
     virtual int ReadMic(int16_t* data, int maxlen) = 0;
@@ -73,6 +76,8 @@ struct FrameInfo
 {
     bool hardware = false;         // true: `texture` (GL) or `vkTexture` is an array, one layer per screen
     void* vkTexture = nullptr;     // ds13r::vk::Texture* from the Vulkan renderer
+    uint64_t vkImage = 0;          // or a VkImage from another Vulkan renderer (3DS), 1 layer
+    int vkFormat = 0;              // its VkFormat
     const void* screens[2] = {};   // software: 32-bit pixels per screen
     unsigned texture = 0;
     int width = 0, height = 0;     // one screen, in pixels
@@ -118,6 +123,8 @@ public:
     // Upscaling (hardware renderers only).
     virtual int RenderScale() const { return 1; }
     virtual bool UsesHardwareRenderer() const { return false; }
+    // True if frames come from Vulkan, so the Vulkan presenter must show them.
+    virtual bool WantsVulkanOutput() const { return false; }
 
     // Accessory inputs.
     virtual void SetSolarLevel(int delta) {}

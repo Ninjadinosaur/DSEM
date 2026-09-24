@@ -116,7 +116,7 @@ target_include_directories(ds13r PRIVATE ${SHADER_OUT})
 target_compile_options(ds13r PRIVATE -Wall -Wextra -Wno-unused-parameter -fwrapv)
 # Vulkan code uses the standard `VkFooInfo info {VK_STRUCTURE_TYPE_FOO};` idiom, which zeroes
 # every other field on purpose; -Wextra would flag each one.
-set_source_files_properties(VulkanContext.cpp VulkanPresenter.cpp vk/VkStream.cpp vk/GPU_Vulkan.cpp vk/GPU2D_Vulkan.cpp vk/GPU3D_Vulkan.cpp PROPERTIES
+set_source_files_properties(VulkanContext.cpp VulkanPresenter.cpp vk/VkStream.cpp vk/GPU_Vulkan.cpp vk/GPU2D_Vulkan.cpp vk/GPU3D_Vulkan.cpp ThreeDsCore.cpp PROPERTIES
     COMPILE_OPTIONS "-Wno-missing-field-initializers")
 
 target_link_libraries(ds13r

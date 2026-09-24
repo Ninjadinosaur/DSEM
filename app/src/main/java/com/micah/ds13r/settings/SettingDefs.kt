@@ -210,6 +210,8 @@ object SettingDefs {
             Category.Bios, SettingKind.File(), "", needsRestart = true, dependsOn = "emu.externalBios"),
 
         // ---- Nintendo 3DS ----
+        SettingDef("3ds.renderer", "3DS renderer", "Vulkan is what Azahar recommends on Android", Category.ThreeDs,
+            SettingKind.Choice(listOf(0 to "OpenGL ES", 1 to "Vulkan (preview)")), 0, perGame = true, needsRestart = true),
         SettingDef("3ds.scale", "3DS resolution", "3x fills the 13R screen in portrait. Higher costs heat and battery",
             Category.ThreeDs, SettingKind.Choice((1..6).map { it to "${it}x (${400 * it}×${240 * it})" }), 3, perGame = true),
         SettingDef("3ds.landscapeLayout", "3DS landscape layout", category = Category.ThreeDs,

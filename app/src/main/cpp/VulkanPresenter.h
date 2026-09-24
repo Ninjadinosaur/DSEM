@@ -34,6 +34,17 @@ public:
     // A frame rendered by the DS Vulkan renderer (a ds13r::vk::Texture*, one layer per screen,
     // already in SHADER_READ_ONLY layout). Sampled directly; no copy.
     void SetExternalFrame(void* texture, int width, int height, int layers);
+    // A frame from another Vulkan renderer on this device (the 3DS engine): a 2D image in
+    // SHADER_READ_ONLY layout, sampled through a view we create per frame.
+    void SetExternalImage(VkImage image, VkFormat format, int width, int height);
+    // Forgets the external image (its owner destroyed or replaced it) until the next SetExternalImage.
+    void DropExternalImage();
+
+    // Frame slots, for renderers that must know when we're done reading their images
+    // (libretro's Vulkan sync index). The next Present() uses CurrentSlot().
+    int CurrentSlot() const { return frameIndex; }
+    int SlotCount() const { return kFramesInFlight; }
+    void WaitSlot(int slot);
 
     bool Present() override;
     void SetTargetRefreshRate(float hz) override;
@@ -55,6 +66,7 @@ private:
         uint64_t textureVersion = 0;   // which software frame the texture holds
         bool textureReady = false;     // has been written at least once (layout is SHADER_READ)
         VkImageView boundView = VK_NULL_HANDLE; // what the descriptor set currently points at
+        VkImageView externalView = VK_NULL_HANDLE; // per-frame view of an external image
     };
 
     bool CreatePipeline();
@@ -104,6 +116,9 @@ private:
     void* extTexture = nullptr;
     int extWidth = 0, extHeight = 0, extLayers = 0;
     bool useExternal = false;
+    VkImage extImage = VK_NULL_HANDLE;
+    VkFormat extFormat = VK_FORMAT_UNDEFINED;
+    bool useExternalImage = false;
 
     std::mutex layoutLock;
     PresentLayout layout;

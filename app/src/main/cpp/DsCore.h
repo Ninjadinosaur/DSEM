@@ -43,6 +43,7 @@ public:
     int ReadAudio(int16_t* out, int frames) override;
     int RenderScale() const override;
     bool UsesHardwareRenderer() const override { return activeRenderer != 0; }
+    bool WantsVulkanOutput() const override { return activeRenderer == 3; }
     void SetSolarLevel(int delta) override;
     void SyncClock() override;
 

@@ -48,6 +48,7 @@ public:
     int ReadAudio(int16_t* out, int frames) override;
     int RenderScale() const override;
     bool UsesHardwareRenderer() const override { return true; }
+    bool WantsVulkanOutput() const override { return useVulkan; }
 
     // Size of the composed frame (both screens) the core produces, for the app's layout.
     void FrameSize(int& width, int& height) const { width = frameW; height = frameH; }
@@ -60,6 +61,10 @@ public:
     uintptr_t CurrentFramebuffer() const { return fbo; }
 
     CoreHost& Host() { return host; }
+
+    // ---- libretro Vulkan interface (retro_hw_render_interface_vulkan callbacks)
+    struct VulkanBridge;
+    VulkanBridge& Bridge() { return *vkBridge; }
     // The game file, which the engine's file access serves from our descriptor.
     bool IsRomPath(const char* path) const { return !romLink.empty() && romLink == path; }
     int RomFd() const { return romFd; }
@@ -69,6 +74,7 @@ private:
     void CreateFramebuffer(int width, int height);
     void DestroyFramebuffer();
     void CopyToPresenterTexture(unsigned width, unsigned height);
+    void ForgetVulkanImage();
     std::string OptionOverride(const std::string& key) const;
 
     CoreHost& host;
@@ -86,6 +92,8 @@ private:
     // Rendering
     struct HwRender;
     std::unique_ptr<HwRender> hw;
+    bool useVulkan = false;                  // Azahar renders with Vulkan (else OpenGL ES)
+    std::unique_ptr<VulkanBridge> vkBridge;
     GLuint fbo = 0, fboColor = 0, fboDepth = 0;
     int fboW = 0, fboH = 0;
     GLuint outTexture = 0;   // 1-layer texture array handed to the presenter

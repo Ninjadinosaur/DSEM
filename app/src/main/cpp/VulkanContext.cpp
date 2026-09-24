@@ -106,12 +106,49 @@ bool VulkanContext::Init(const std::string& cacheDir)
     for (uint32_t i = 0; i < swappyCount; i++)
         if (strcmp(swappyNames[i], VK_KHR_SWAPCHAIN_EXTENSION_NAME) != 0) deviceExts.push_back(swappyNames[i]);
 
+    // The 3DS engine (Azahar) renders on this device too. Enable what its own device setup
+    // asks for (citra_libretro/libretro_vk.cpp CreateVulkanDevice), wherever supported.
+    auto hasExt = [&](const char* name) {
+        for (const auto& e : available)
+            if (strcmp(e.extensionName, name) == 0) return true;
+        return false;
+    };
+    auto addExt = [&](const char* name) {
+        for (const char* e : deviceExts)
+            if (strcmp(e, name) == 0) return true;
+        if (!hasExt(name)) return false;
+        deviceExts.push_back(name);
+        return true;
+    };
+    addExt(VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME);
+    addExt(VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME);
+    addExt(VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);
+    addExt(VK_EXT_TOOLING_INFO_EXTENSION_NAME);
+    bool customBorder = addExt(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME);
+
+    VkPhysicalDeviceFeatures supported {};
+    vkGetPhysicalDeviceFeatures(physicalDevice, &supported);
+    VkPhysicalDeviceFeatures2 features {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+    features.features.geometryShader = supported.geometryShader;
+    features.features.logicOp = supported.logicOp;
+    features.features.samplerAnisotropy = supported.samplerAnisotropy;
+    features.features.fragmentStoresAndAtomics = supported.fragmentStoresAndAtomics;
+    features.features.shaderClipDistance = supported.shaderClipDistance;
+    VkPhysicalDeviceCustomBorderColorFeaturesEXT borderFeatures {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_FEATURES_EXT};
+    if (customBorder)
+    {
+        borderFeatures.customBorderColors = VK_TRUE;
+        borderFeatures.customBorderColorWithoutFormat = VK_TRUE;
+        features.pNext = &borderFeatures;
+    }
+
     float priority = 1.0f;
     VkDeviceQueueCreateInfo qci {VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
     qci.queueFamilyIndex = queueFamily;
     qci.queueCount = 1;
     qci.pQueuePriorities = &priority;
     VkDeviceCreateInfo dci {VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
+    dci.pNext = &features;
     dci.queueCreateInfoCount = 1;
     dci.pQueueCreateInfos = &qci;
     dci.enabledExtensionCount = (uint32_t)deviceExts.size();
@@ -179,6 +216,24 @@ bool VulkanContext::Init(const std::string& cacheDir)
     return true;
 }
 
+VkResult VulkanContext::Submit(const VkSubmitInfo& info, VkFence fence)
+{
+    std::lock_guard<std::recursive_mutex> l(queueLock);
+    return vkQueueSubmit(queue, 1, &info, fence);
+}
+
+void VulkanContext::DeviceWaitIdle()
+{
+    std::lock_guard<std::recursive_mutex> l(queueLock);
+    if (device) vkDeviceWaitIdle(device);
+}
+
+VkResult VulkanContext::WaitIdle()
+{
+    std::lock_guard<std::recursive_mutex> l(queueLock);
+    return vkQueueWaitIdle(queue);
+}
+
 void VulkanContext::SavePipelineCache()
 {
     if (!pipelineCache) return;
@@ -194,7 +249,10 @@ void VulkanContext::Shutdown()
 {
     if (device)
     {
-        vkDeviceWaitIdle(device);
+        {
+            std::lock_guard<std::recursive_mutex> l(queueLock);
+            vkDeviceWaitIdle(device);
+        }
         SavePipelineCache();
         if (oncePool) vkDestroyCommandPool(device, oncePool, nullptr);
         if (pipelineCache) vkDestroyPipelineCache(device, pipelineCache, nullptr);
@@ -241,8 +299,8 @@ bool VulkanContext::EndOnce(VkCommandBuffer cmd)
     VkSubmitInfo si {VK_STRUCTURE_TYPE_SUBMIT_INFO};
     si.commandBufferCount = 1;
     si.pCommandBuffers = &cmd;
-    VkResult r = vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE);
-    if (r == VK_SUCCESS) r = vkQueueWaitIdle(queue);
+    VkResult r = Submit(si, VK_NULL_HANDLE);
+    if (r == VK_SUCCESS) r = WaitIdle();
     vkFreeCommandBuffers(device, oncePool, 1, &cmd);
     if (r != VK_SUCCESS) LOGE("Vulkan: one-shot submit failed (%s)", VkResultName(r));
     return r == VK_SUCCESS;

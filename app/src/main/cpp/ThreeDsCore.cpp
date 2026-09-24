@@ -1,10 +1,13 @@
 #include "ThreeDsCore.h"
 #include "ConfigStore.h"
 #include "GLPresenter.h"
+#include "VulkanContext.h"
+#include "VulkanPresenter.h"
 #include "IoWorker.h"
 #include "LogBuffer.h"
 
 #include <libretro.h>
+#include <libretro_vulkan.h>
 
 #include <EGL/egl.h>
 #include <algorithm>
@@ -58,6 +61,86 @@ struct ThreeDsCore::HwRender
 {
     retro_hw_render_callback cb {};
     bool requested = false;
+};
+
+// Our side of libretro's Vulkan interface: Azahar renders on the app's Vulkan device and queue,
+// hands us each finished frame as an image (set_image), and uses the presenter's frame slots as
+// libretro "sync indices" so it never overwrites an image we are still showing.
+struct ThreeDsCore::VulkanBridge
+{
+    retro_hw_render_interface_vulkan iface {};
+    VulkanContext* vk = nullptr;
+    VulkanPresenter* presenter = nullptr;
+    VkImage image = VK_NULL_HANDLE;
+    VkFormat format = VK_FORMAT_UNDEFINED;
+    bool warnedSemaphores = false;
+
+    static VulkanBridge& From(void* handle) { return *static_cast<VulkanBridge*>(handle); }
+
+    static void SetImage(void* handle, const retro_vulkan_image* img, uint32_t numSemaphores, const VkSemaphore*, uint32_t)
+    {
+        VulkanBridge& b = From(handle);
+        if (!img) return;
+        b.image = img->create_info.image;
+        b.format = img->create_info.format;
+        // Azahar submits on our queue without semaphores (queue order is the sync); any other
+        // core would need them waited on.
+        if (numSemaphores && !b.warnedSemaphores)
+        {
+            LOGW("3DS Vulkan: core passed %u semaphores; relying on queue order", numSemaphores);
+            b.warnedSemaphores = true;
+        }
+    }
+    static uint32_t GetSyncIndex(void* handle)
+    {
+        VulkanBridge& b = From(handle);
+        return b.presenter ? (uint32_t)b.presenter->CurrentSlot() : 0;
+    }
+    static uint32_t GetSyncIndexMask(void* handle)
+    {
+        VulkanBridge& b = From(handle);
+        return b.presenter ? (1u << b.presenter->SlotCount()) - 1 : 1;
+    }
+    static void SetCommandBuffers(void* handle, uint32_t num, const VkCommandBuffer* cmds)
+    {
+        VulkanBridge& b = From(handle);
+        VkSubmitInfo si {VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        si.commandBufferCount = num;
+        si.pCommandBuffers = cmds;
+        b.vk->Submit(si, VK_NULL_HANDLE);
+    }
+    static void WaitSyncIndex(void* handle)
+    {
+        VulkanBridge& b = From(handle);
+        if (b.presenter) b.presenter->WaitSlot(b.presenter->CurrentSlot());
+    }
+    static void LockQueue(void* handle) { From(handle).vk->LockQueue(); }
+    static void UnlockQueue(void* handle) { From(handle).vk->UnlockQueue(); }
+    static void SetSignalSemaphore(void*, VkSemaphore) {}
+
+    void Setup(VulkanContext& context, VulkanPresenter* p)
+    {
+        vk = &context;
+        presenter = p;
+        iface.interface_type = RETRO_HW_RENDER_INTERFACE_VULKAN;
+        iface.interface_version = RETRO_HW_RENDER_INTERFACE_VULKAN_VERSION;
+        iface.handle = this;
+        iface.instance = context.Instance();
+        iface.gpu = context.PhysicalDevice();
+        iface.device = context.Device();
+        iface.get_device_proc_addr = vkGetDeviceProcAddr;
+        iface.get_instance_proc_addr = vkGetInstanceProcAddr;
+        iface.queue = context.Queue();
+        iface.queue_index = context.QueueFamily();
+        iface.set_image = SetImage;
+        iface.get_sync_index = GetSyncIndex;
+        iface.get_sync_index_mask = GetSyncIndexMask;
+        iface.set_command_buffers = SetCommandBuffers;
+        iface.wait_sync_index = WaitSyncIndex;
+        iface.lock_queue = LockQueue;
+        iface.unlock_queue = UnlockQueue;
+        iface.set_signal_semaphore = SetSignalSemaphore;
+    }
 };
 
 namespace
@@ -229,7 +312,8 @@ constexpr size_t kRingFrames = 16384;
 constexpr double kOutputRate = 48000.0;
 }
 
-ThreeDsCore::ThreeDsCore(CoreHost& h) : host(h), api(std::make_unique<LibretroApi>()), hw(std::make_unique<HwRender>())
+ThreeDsCore::ThreeDsCore(CoreHost& h)
+    : host(h), api(std::make_unique<LibretroApi>()), hw(std::make_unique<HwRender>()), vkBridge(std::make_unique<VulkanBridge>())
 {
     ring.resize(kRingFrames * 2);
     systemDir = host.FilesDir() + "/3ds/system";
@@ -284,6 +368,24 @@ std::string ThreeDsCore::LoadGame(int fd, const std::string& extension, const st
     if (!LoadLibrary()) return "The 3DS engine could not be loaded.";
     gActive = this;
 
+    // Renderer: Vulkan (on the app's shared device) if chosen and available, else OpenGL ES.
+    useVulkan = false;
+    if (host.Config().GetInt("3ds.renderer", 0) == 1)
+    {
+        VulkanContext* context = host.Vulkan();
+        VulkanPresenter* presenter = context ? host.VulkanOutput() : nullptr;
+        if (context && presenter)
+        {
+            vkBridge->Setup(*context, presenter);
+            useVulkan = true;
+        }
+        else
+        {
+            LOGW("3DS: Vulkan unavailable, using OpenGL ES");
+        }
+    }
+    LOGI("3DS renderer: %s", useVulkan ? "Vulkan" : "OpenGL ES");
+
     api->retro_set_environment(EnvTrampoline);
     api->retro_set_video_refresh(VideoTrampoline);
     api->retro_set_audio_sample(AudioSampleTrampoline);
@@ -309,9 +411,12 @@ std::string ThreeDsCore::LoadGame(int fd, const std::string& extension, const st
 
     if (hw->requested)
     {
-        // Our GL context is current on this (the emulation) thread; the core draws into our FBO.
-        if (host.Presenter()) host.Presenter()->MakeCurrent();
-        CreateFramebuffer((int)av.geometry.max_width, (int)av.geometry.max_height);
+        if (!useVulkan)
+        {
+            // Our GL context is current on this (the emulation) thread; the core draws into our FBO.
+            if (host.Presenter()) host.Presenter()->MakeCurrent();
+            CreateFramebuffer((int)av.geometry.max_width, (int)av.geometry.max_height);
+        }
         // The engine boots the game here, once it has a graphics context. It reports any
         // failure only as an on-screen message.
         lastMessage.clear();
@@ -365,7 +470,8 @@ std::string ThreeDsCore::OptionOverride(const std::string& key) const
 {
     const ConfigStore& config = host.Config();
     // Our settings, mapped onto Azahar's core options.
-    if (key == "citra_graphics_api") return "OpenGL"; // the presenter's context is OpenGL ES
+    // Our GL context is OpenGL ES; Vulkan uses the app's shared device.
+    if (key == "citra_graphics_api") return useVulkan ? "Vulkan" : "OpenGL";
     if (key == "citra_resolution_factor")
     {
         int scale = (int)config.GetInt("3ds.scale", 3);
@@ -466,11 +572,26 @@ bool ThreeDsCore::Environment(unsigned cmd, void* data)
     case RETRO_ENVIRONMENT_SET_PIXEL_FORMAT:
         return *static_cast<retro_pixel_format*>(data) == RETRO_PIXEL_FORMAT_XRGB8888;
     case RETRO_ENVIRONMENT_GET_PREFERRED_HW_RENDER:
-        *static_cast<unsigned*>(data) = RETRO_HW_CONTEXT_OPENGLES3;
+        *static_cast<unsigned*>(data) = useVulkan ? RETRO_HW_CONTEXT_VULKAN : RETRO_HW_CONTEXT_OPENGLES3;
         return true;
+    case RETRO_ENVIRONMENT_GET_HW_RENDER_INTERFACE:
+        if (!useVulkan) return false;
+        *static_cast<const retro_hw_render_interface**>(data) =
+            reinterpret_cast<const retro_hw_render_interface*>(&vkBridge->iface);
+        return true;
+    case RETRO_ENVIRONMENT_SET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE:
+        // Accepted, but the device already exists (shared with our renderers and created with
+        // the features Azahar asks for), so its create_device callback isn't used.
+        return useVulkan;
     case RETRO_ENVIRONMENT_SET_HW_RENDER:
     {
         auto* cb = static_cast<retro_hw_render_callback*>(data);
+        if (useVulkan && cb->context_type == RETRO_HW_CONTEXT_VULKAN)
+        {
+            hw->cb = *cb;
+            hw->requested = true;
+            return true;
+        }
         if (cb->context_type != RETRO_HW_CONTEXT_OPENGLES3 && cb->context_type != RETRO_HW_CONTEXT_OPENGLES_VERSION)
         {
             LOGW("3DS: core asked for an unsupported renderer (%d)", (int)cb->context_type);
@@ -572,7 +693,7 @@ void ThreeDsCore::VideoRefresh(const void* data, unsigned width, unsigned height
     frameH = (int)height;
     if (data == RETRO_HW_FRAME_BUFFER_VALID)
     {
-        CopyToPresenterTexture(width, height);
+        if (!useVulkan) CopyToPresenterTexture(width, height);
         softwareFrame = false;
     }
     else
@@ -632,6 +753,15 @@ bool ThreeDsCore::GetFrame(FrameInfo& out)
         return true;
     }
     out.hardware = true;
+    if (useVulkan)
+    {
+        if (!vkBridge->image) return false;
+        out.vkImage = (uint64_t)vkBridge->image;
+        out.vkFormat = (int)vkBridge->format;
+        out.width = frameW;
+        out.height = frameH;
+        return true;
+    }
     out.texture = outTexture;
     out.width = outW;
     out.height = outH;
@@ -754,7 +884,9 @@ bool ThreeDsCore::LoadState(const uint8_t* data, size_t len)
 {
     if (!gameLoaded) return false;
     gActive = this;
-    return api->retro_unserialize(data, len);
+    bool ok = api->retro_unserialize(data, len);
+    ForgetVulkanImage();
+    return ok;
 }
 
 void ThreeDsCore::SetCheats(const std::vector<std::string>& codes)
@@ -770,6 +902,16 @@ void ThreeDsCore::Reset()
     if (!gameLoaded) return;
     gActive = this;
     api->retro_reset();
+    ForgetVulkanImage();
+}
+
+// Azahar restarts its whole system (renderer included) on a state load or reset, destroying the
+// output image it gave us; the new one arrives through set_image on the next frame.
+void ThreeDsCore::ForgetVulkanImage()
+{
+    if (!useVulkan || !vkBridge) return;
+    vkBridge->image = VK_NULL_HANDLE;
+    haveFrame = false;
 }
 
 void ThreeDsCore::Shutdown()
@@ -784,7 +926,7 @@ void ThreeDsCore::Shutdown()
     {
         if (hw->requested && hw->cb.context_destroy)
         {
-            if (host.Presenter()) host.Presenter()->MakeCurrent();
+            if (!useVulkan && host.Presenter()) host.Presenter()->MakeCurrent();
             hw->cb.context_destroy();
         }
         api->retro_unload_game();

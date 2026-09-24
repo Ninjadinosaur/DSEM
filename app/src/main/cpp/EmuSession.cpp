@@ -405,19 +405,9 @@ VulkanContext* EmuSession::Vulkan()
     return vulkan.get();
 }
 
-ds13r::Presenter* EmuSession::Output()
+VulkanPresenter* EmuSession::VulkanOutput()
 {
-    if (vulkanOutput && vkPresenter) return vkPresenter.get();
-    return presenter.get();
-}
-
-// Emulation thread. Chooses the presenter for the running game and hands it the window:
-// Vulkan for DS games on the Vulkan renderer, OpenGL ES for everything else. A window can
-// only belong to one graphics API at a time, so the other presenter lets go of it first.
-void EmuSession::UpdateOutput()
-{
-    bool want = dsCore && config.GetInt("video.renderer", 1) == 3;
-    if (want && !vkPresenter && !vulkanFailed && Vulkan())
+    if (!vkPresenter && !vulkanFailed && Vulkan())
     {
         vkPresenter = std::make_unique<VulkanPresenter>(*vulkan, vm, activity);
         if (vkPresenter->Init())
@@ -432,7 +422,22 @@ void EmuSession::UpdateOutput()
             vulkanFailed = true;
         }
     }
-    if (want && !vkPresenter) want = false;
+    return vkPresenter.get();
+}
+
+ds13r::Presenter* EmuSession::Output()
+{
+    if (vulkanOutput && vkPresenter) return vkPresenter.get();
+    return presenter.get();
+}
+
+// Emulation thread. Chooses the presenter for the running game and hands it the window:
+// Vulkan for DS games on the Vulkan renderer, OpenGL ES for everything else. A window can
+// only belong to one graphics API at a time, so the other presenter lets go of it first.
+void EmuSession::UpdateOutput()
+{
+    bool want = core && core->WantsVulkanOutput();
+    if (want && !VulkanOutput()) want = false;
     if (want == vulkanOutput) return;
 
     Output()->ReleaseWindow();
@@ -746,10 +751,18 @@ void EmuSession::PresentFrame()
     {
         if (frame.vkTexture && vulkanOutput)
             vkPresenter->SetExternalFrame(frame.vkTexture, frame.width, frame.height, frame.screenCount);
+        else if (frame.vkImage && vulkanOutput)
+            vkPresenter->SetExternalImage((VkImage)frame.vkImage, (VkFormat)frame.vkFormat, frame.width, frame.height);
         else if (frame.hardware)
             presenter->SetHardwareFrame(frame.texture, frame.width, frame.height);
         else
             Output()->UploadSoftwareFrame(frame.screens, frame.screenCount, frame.width, frame.height, frame.bgra);
+    }
+    else if (vulkanOutput)
+    {
+        // No frame (e.g. the 3DS engine just rebuilt its renderer for a state load): the image
+        // we were showing may be gone, so never sample it again.
+        vkPresenter->DropExternalImage();
     }
     if (Output()->Present()) statPresents++;
 }
