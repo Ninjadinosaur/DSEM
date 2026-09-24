@@ -88,7 +88,7 @@ object SettingDefs {
         SettingDef("video.renderer", "Renderer", "OpenGL ES upscales 3D; Software is the accuracy reference (native resolution)",
             Category.Video,
             SettingKind.Choice(listOf(1 to "OpenGL ES (upscaling)", 2 to "OpenGL ES compute (upscaling, most accurate)",
-                3 to "Vulkan (preview: 2D only, no 3D yet)", 0 to "Software")),
+                3 to "Vulkan (preview: 3D untested)", 0 to "Software")),
             1, perGame = true),
         SettingDef("video.scale", "Upscaling", "4x fills the 13R screen exactly in portrait. OpenGL ES renderers only", Category.Video,
             SettingKind.Choice((1..8).map { it to "${it}x (${256 * it}×${192 * it})" }), 4, perGame = true),
