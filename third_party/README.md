@@ -49,6 +49,9 @@ Our fixes are kept as patch files in `app/src/main/azahar/patches/`; the Gradle 
    Adreno fails to link loops bounded by a uniform once the body is large (Pokemon X/Y skinning
    shaders); verified on the 13R by compiling variants of the failing shader. With this, those
    scenes run fully on the GPU: 4 slow frames in 20 s instead of 415.
+5. `0005-libretro-log-level-warning.patch`, `citra_libretro.cpp`: the libretro frontend hardcodes
+   its log filter to Debug, so every debug line (thousands per save state) was formatted and sent
+   to our log, pushing out earlier entries. It now logs warnings and errors only.
 
 The host also disables Azahar's ARM64 shader JIT (used only for CPU vertex shading): it mirrored
 and garbled geometry in Pokemon X, while the interpreter rendered the same save state correctly.

@@ -1,0 +1,13 @@
+diff --git a/src/citra_libretro/citra_libretro.cpp b/src/citra_libretro/citra_libretro.cpp
+index 8a65f9d..50ff247 100644
+--- a/src/citra_libretro/citra_libretro.cpp
++++ b/src/citra_libretro/citra_libretro.cpp
+@@ -56,7 +56,7 @@
+ 
+ class CitraLibRetro {
+ public:
+-    CitraLibRetro() : log_filter(Common::Log::Level::Debug) {}
++    CitraLibRetro() : log_filter(Common::Log::Level::Warning) {}
+ 
+     Common::Log::Filter log_filter;
+     std::unique_ptr<EmuWindow_LibRetro> emu_window;
