@@ -85,12 +85,12 @@ object SettingDefs {
             SettingKind.Toggle, true, native = false),
 
         // ---- Graphics ----
-        SettingDef("video.renderer", "Renderer", "OpenGL ES upscales 3D; Software is the accuracy reference (native resolution)",
+        SettingDef("video.renderer", "Renderer", "Vulkan and OpenGL ES upscale 3D; Software is the accuracy reference (native resolution)",
             Category.Video,
-            SettingKind.Choice(listOf(1 to "OpenGL ES (upscaling)", 2 to "OpenGL ES compute (upscaling, most accurate)",
-                3 to "Vulkan (preview: 3D untested)", 0 to "Software")),
-            1, perGame = true),
-        SettingDef("video.scale", "Upscaling", "4x fills the 13R screen exactly in portrait. OpenGL ES renderers only", Category.Video,
+            SettingKind.Choice(listOf(3 to "Vulkan (upscaling)", 1 to "OpenGL ES (upscaling)",
+                2 to "OpenGL ES compute (upscaling, most accurate)", 0 to "Software")),
+            3, perGame = true),
+        SettingDef("video.scale", "Upscaling", "4x fills the 13R screen exactly in portrait. Not used by the Software renderer", Category.Video,
             SettingKind.Choice((1..8).map { it to "${it}x (${256 * it}Ã—${192 * it})" }), 4, perGame = true),
         SettingDef("video.threaded3D", "Threaded 3D rendering", "Renders 3D on a separate core", Category.Video,
             SettingKind.Toggle, true, perGame = true),
@@ -211,9 +211,9 @@ object SettingDefs {
 
         // ---- Nintendo 3DS ----
         SettingDef("3ds.renderer", "3DS renderer", "Vulkan is what Azahar recommends on Android", Category.ThreeDs,
-            SettingKind.Choice(listOf(0 to "OpenGL ES", 1 to "Vulkan (preview)")), 0, perGame = true, needsRestart = true),
+            SettingKind.Choice(listOf(1 to "Vulkan", 0 to "OpenGL ES")), 1, perGame = true, needsRestart = true),
         SettingDef("3ds.scale", "3DS resolution", "3x fills the 13R screen in portrait. Higher costs heat and battery",
-            Category.ThreeDs, SettingKind.Choice((1..6).map { it to "${it}x (${400 * it}×${240 * it})" }), 3, perGame = true),
+            Category.ThreeDs, SettingKind.Choice((1..6).map { it to "${it}x (${400 * it}ï¿½${240 * it})" }), 3, perGame = true),
         SettingDef("3ds.landscapeLayout", "3DS landscape layout", category = Category.ThreeDs,
             kind = SettingKind.Choice(listOf(0 to "Stacked, controls either side", 1 to "Side by side", 2 to "Large top screen")),
             default = 0, perGame = true),

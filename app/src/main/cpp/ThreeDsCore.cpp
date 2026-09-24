@@ -370,7 +370,7 @@ std::string ThreeDsCore::LoadGame(int fd, const std::string& extension, const st
 
     // Renderer: Vulkan (on the app's shared device) if chosen and available, else OpenGL ES.
     useVulkan = false;
-    if (host.Config().GetInt("3ds.renderer", 0) == 1)
+    if (host.Config().GetInt("3ds.renderer", 1) == 1)
     {
         VulkanContext* context = host.Vulkan();
         VulkanPresenter* presenter = context ? host.VulkanOutput() : nullptr;

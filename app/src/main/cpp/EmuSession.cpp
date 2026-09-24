@@ -125,22 +125,27 @@ void EmuSession::Init(JavaVM* javaVm, jobject act, const std::string& dir)
     vm = javaVm;
     filesDir = dir;
 
-    if (activity)
-    {
-        JNIEnv* env = nullptr;
-        vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6);
-        if (env) env->DeleteGlobalRef(activity);
-    }
-    activity = act;
-
     for (const char* sub : {"/saves", "/states", "/backups", "/cheats", "/sd", "/bios", "/screenshots"})
         MakeDirs(filesDir + sub);
 
     if (!thread.joinable())
     {
+        activity = act;
         quit = false;
         thread = std::thread([this] { ThreadMain(); });
+        return;
     }
+
+    // A new game screen (activity). The Vulkan presenter outlives it and hands the activity to
+    // Swappy whenever it rebuilds its swapchain, so swap it on the emulation thread before the
+    // old reference is deleted (ahead of the new surface, which is posted after this).
+    Post([this, act] {
+        jobject old = activity;
+        activity = act;
+        if (vkPresenter) vkPresenter->SetActivity(act);
+        if (old)
+            if (JNIEnv* env = ThreadEnv()) env->DeleteGlobalRef(old);
+    }, false);
 }
 
 void EmuSession::SetCallbacks(const HostCallbacks& cb)
@@ -209,6 +214,8 @@ void EmuSession::SwapCore(std::unique_ptr<EmuCore> next)
     running = false;
     audio.SetSource(nullptr);
     audio.StopMic();
+    // The outgoing core's renderer owns the frame the Vulkan presenter is showing.
+    if (vkPresenter) vkPresenter->DropExternalFrames();
     if (core) core->Shutdown();
     core = std::move(next);
     dsCore = core && strcmp(core->SystemName(), "DS") == 0 ? static_cast<DsCore*>(core.get()) : nullptr;
@@ -441,6 +448,7 @@ void EmuSession::UpdateOutput()
     if (want == vulkanOutput) return;
 
     Output()->ReleaseWindow();
+    if (!want && vkPresenter) vkPresenter->DropExternalFrames(); // its renderer is gone
     vulkanOutput = want;
     LOGI("Output: %s", vulkanOutput ? "Vulkan" : "OpenGL ES");
     if (window)

@@ -264,20 +264,20 @@ void DsCore::ApplySettings()
     if (!nds) return;
     ConfigStore& config = host.Config();
 
-    // 0 = software, 1 = OpenGL ES, 2 = OpenGL ES compute. The GL renderers share the presenter's
-    // context, which is current on the emulation thread.
-    int want = (int)config.GetInt("video.renderer", 1);
+    // 0 = software, 1 = OpenGL ES, 2 = OpenGL ES compute, 3 = Vulkan. The GL renderers share the
+    // presenter's context, which is current on the emulation thread.
+    int want = (int)config.GetInt("video.renderer", 3);
+    if (want == 3 && !host.Vulkan())
+        want = 1; // no Vulkan: fall back to OpenGL ES
     if (want != activeRenderer)
     {
-        if (want == 3 && !host.Vulkan())
-            want = 1; // no Vulkan: fall back to OpenGL ES
         if (want == 0)
         {
             nds->SetRenderer(std::make_unique<SoftRenderer>(*nds));
         }
         else if (want == 3)
         {
-            // Vulkan: 2D layers, sprites, compositing and capture on the GPU (3D: phase 3).
+            // Vulkan: 2D and the compute 3D renderer on the GPU.
             nds->SetRenderer(std::make_unique<VulkanRenderer>(*nds, *host.Vulkan()));
         }
         else

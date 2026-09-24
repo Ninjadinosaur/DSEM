@@ -18,6 +18,8 @@ class VulkanPresenter : public Presenter
 {
 public:
     VulkanPresenter(VulkanContext& vk, JavaVM* vm, jobject activity);
+    // The current game activity (global ref owned by the session), used for frame pacing.
+    void SetActivity(jobject act) { activity = act; }
     ~VulkanPresenter() override;
 
     bool Init() override;
@@ -39,6 +41,8 @@ public:
     void SetExternalImage(VkImage image, VkFormat format, int width, int height);
     // Forgets the external image (its owner destroyed or replaced it) until the next SetExternalImage.
     void DropExternalImage();
+    // Forgets any renderer-owned frame (texture or image), before that renderer is destroyed.
+    void DropExternalFrames();
 
     // Frame slots, for renderers that must know when we're done reading their images
     // (libretro's Vulkan sync index). The next Present() uses CurrentSlot().

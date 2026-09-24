@@ -466,6 +466,20 @@ void VulkanPresenter::DropExternalImage()
     haveFrame = false;
 }
 
+void VulkanPresenter::DropExternalFrames()
+{
+    DropExternalImage();
+    if (useExternal)
+    {
+        extTexture = nullptr;
+        useExternal = false;
+        haveFrame = false;
+    }
+    // A new object can reuse a destroyed view's handle value: force every slot to rewrite its
+    // descriptor next time rather than trusting the cached handle.
+    for (Frame& f : frames) f.boundView = VK_NULL_HANDLE;
+}
+
 void VulkanPresenter::WaitSlot(int slot)
 {
     if (!initialized || slot < 0 || slot >= kFramesInFlight) return;
