@@ -15,6 +15,7 @@ import android.hardware.input.InputManager
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
+import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -62,6 +63,18 @@ class EmulationActivity : ComponentActivity(),
 
     companion object {
         private val cheatJson = Json { ignoreUnknownKeys = true }
+
+        /**
+         * 3DS shader cache build phases, in order, with their share of the loading bar. Compiling
+         * the pipelines is nearly all of a slow load (profiled on the 13R: ~99% of the time).
+         */
+        private val LOAD_PHASES = listOf(
+            "Vertex shaders" to 0.03,
+            "Fragment shaders" to 0.03,
+            "Geometry shaders" to 0.01,
+            "Pipelines" to 0.03,
+            "Compiling pipelines" to 0.9,
+        )
 
         const val EXTRA_GAME_URI = "game_uri"
         const val EXTRA_BOOT_FIRMWARE = "boot_firmware"
@@ -176,6 +189,7 @@ class EmulationActivity : ComponentActivity(),
 
     private fun loadGame() {
         lifecycleScope.launch {
+            val progress = if (is3ds) launch { watch3dsLoad() } else null
             val error = withContext(Dispatchers.IO) {
                 val g = game
                 if (g == null) {
@@ -193,6 +207,8 @@ class EmulationActivity : ComponentActivity(),
                     }
                 }
             }
+            progress?.cancel()
+            ui.loading.value = null
             if (error != null) {
                 ui.fatalError.value = if (is3ds && game?.encrypted == true)
                     "$error\n\nThis 3DS game is an encrypted dump. The 3DS engine only runs decrypted games: " +
@@ -213,6 +229,54 @@ class EmulationActivity : ComponentActivity(),
 
             loaded = true
             if (resumed && !ui.menuOpen.value) NativeBridge.nativeStart()
+        }
+    }
+
+    /**
+     * While a 3DS game loads, shows the engine's shader cache build as one overall progress bar.
+     * Normally that takes a second or two; after the cache was lost it can take minutes.
+     * Runs until cancelled; logs how long each phase took.
+     */
+    private suspend fun watch3dsLoad() {
+        val start = SystemClock.elapsedRealtime()
+        val phaseMs = LongArray(LOAD_PHASES.size)
+        var phase = -1
+        var phaseStart = start
+        var built = false
+        var shown = 0f
+        try {
+            while (true) {
+                delay(100)
+                val (p, done, total) = NativeBridge.nativeGet3dsLoadProgress()
+                val now = SystemClock.elapsedRealtime()
+                if (p != phase) {
+                    if (phase >= 0) phaseMs[phase] += now - phaseStart
+                    if (p >= 0) built = true
+                    phase = p
+                    phaseStart = now
+                }
+                if (now - start < 1000) continue // quick loads show nothing
+                val fraction = when {
+                    p >= 0 -> LOAD_PHASES.take(p).sumOf { it.second } +
+                        LOAD_PHASES[p].second * (if (total > 0) done.toDouble() / total else 0.0)
+                    built -> 1.0
+                    else -> 0.0
+                }
+                shown = maxOf(shown, fraction.toFloat()) // never moves backwards
+                val step = when {
+                    p >= 0 -> "${LOAD_PHASES[p].first} ${minOf(done + 1, maxOf(total, 1))} of ${maxOf(total, 1)}"
+                    built -> "Starting the game"
+                    else -> "Loading the game"
+                }
+                ui.loading.value = LoadingProgress(shown, step, explain = now - start > 5000)
+            }
+        } finally {
+            val now = SystemClock.elapsedRealtime()
+            if (phase >= 0) phaseMs[phase] += now - phaseStart
+            Log.i("DS13R", "3DS load: %.1f s (shaders: %s)".format(
+                (now - start) / 1000.0,
+                LOAD_PHASES.indices.joinToString { "${LOAD_PHASES[it].first} %.1f s".format(phaseMs[it] / 1000.0) },
+            ))
         }
     }
 

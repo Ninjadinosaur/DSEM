@@ -236,22 +236,14 @@ void EmuSession::ClearRewind()
 
 std::string EmuSession::LoadGame(int fd, const std::string& fileName, const std::string& key)
 {
+    // 3DS games run to gigabytes: the engine streams them from the file instead.
+    std::string ext = ThreeDsExtension(fileName);
+    if (!ext.empty()) return LoadThreeDs(fd, ext, SanitizeName(key));
+
+    ++loadGeneration;
     std::string error;
     Post([&] {
         std::string gameKey = SanitizeName(key);
-        // 3DS games run to gigabytes: the engine streams them from the file instead.
-        std::string ext = ThreeDsExtension(fileName);
-        if (!ext.empty())
-        {
-            SwapCore(nullptr);
-            config.SetInt("video.scaleCap", 0);
-            auto next = std::make_unique<ThreeDsCore>(*this);
-            error = next->LoadGame(fd, ext, gameKey);
-            if (error.empty()) SwapCore(std::move(next));
-            running = error.empty();
-            return;
-        }
-
         std::unique_ptr<uint8_t[]> rom;
         uint32_t len = 0;
         if (!ReadFd(fd, rom, len))
@@ -285,8 +277,45 @@ std::string EmuSession::LoadGame(int fd, const std::string& fileName, const std:
     return error;
 }
 
+// A 3DS boot can take minutes: when the engine's GPU shader cache is missing it rebuilds every
+// shader the game has used. On the Vulkan renderer the boot runs on the calling thread, so the
+// emulation thread keeps serving the UI (surface, pause, settings) meanwhile; the OpenGL ES
+// renderer needs its context, which lives on the emulation thread.
+std::string EmuSession::LoadThreeDs(int fd, const std::string& ext, const std::string& gameKey)
+{
+    // One 3DS boot at a time: the engine is a single global instance.
+    std::lock_guard<std::mutex> one(threeDsLoadLock);
+    const uint64_t generation = ++loadGeneration;
+    std::unique_ptr<ThreeDsCore> next;
+    std::string error;
+    bool offThread = false;
+    Post([&] {
+        SwapCore(nullptr);
+        config.SetInt("video.scaleCap", 0);
+        next = std::make_unique<ThreeDsCore>(*this);
+        error = next->Prepare(fd, ext);
+        offThread = error.empty() && next->BootsOffThread();
+        if (error.empty() && !offThread) error = next->Boot(gameKey);
+    }, true);
+    if (offThread) error = next->Boot(gameKey);
+    Post([&] {
+        if (loadGeneration != generation)
+        {
+            // The player left, or another game started, during the boot.
+            next.reset();
+            if (error.empty()) error = "Loading was cancelled.";
+            return;
+        }
+        if (error.empty()) SwapCore(std::move(next));
+        else next.reset();
+        running = error.empty();
+    }, true);
+    return error;
+}
+
 std::string EmuSession::BootFirmware()
 {
+    ++loadGeneration;
     std::string error;
     Post([&] {
         SwapCore(nullptr);
@@ -371,6 +400,7 @@ void EmuSession::Reset()
 
 void EmuSession::Stop()
 {
+    ++loadGeneration; // a 3DS boot still in progress is discarded when it finishes
     Post([this] { SwapCore(nullptr); }, true);
 }
 

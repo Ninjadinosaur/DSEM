@@ -1,8 +1,10 @@
-/* Only the libretro entry points leave libazahar_libretro.so; everything else (its own copies
-   of teakra, xxHash, fmt, zstd, libc++ ...) stays private so it can't clash with ours. */
+/* Only the libretro entry points (plus our own ds13r_* additions from the patches) leave
+   libazahar_libretro.so; everything else (its own copies of teakra, xxHash, fmt, zstd,
+   libc++ ...) stays private so it can't clash with ours. */
 {
   global:
     retro_*;
+    ds13r_*;
   local:
     *;
 };

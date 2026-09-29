@@ -58,6 +58,17 @@ Our fixes are kept as patch files in `app/src/main/azahar/patches/`; the Gradle 
    (Pokemon X crashed about 7 s after loading once such a program was in its shader cache).
    Isolated on the 13R: the same shader pair links with this form and fails with any vector
    select on the result.
+7. `0007-save-pipeline-cache-and-load-progress.patch` (libretro frontend, Vulkan rasterizer,
+   `thread_worker.h`): the Vulkan driver pipeline cache was written only when the renderer was
+   destroyed, so whenever Android killed the app it was lost and the next launch recompiled every
+   pipeline (about 2 minutes of black screen for Pokemon X on the 13R). Adds
+   `ds13r_save_disk_resources` (the app calls it on leaving the foreground and every 2 minutes;
+   it writes only if the cache grew, via a temp file and rename) and `ds13r_get_load_progress`
+   for the loading screen. Loading now also waits for the queued pipeline compiles, reporting
+   progress, instead of returning while they run: the first thing to wait for them otherwise
+   (restoring the resume state) stalled with no feedback. It deliberately leaves the files in
+   the shader cache hash (below) untouched, reaching `PipelineCache` internals from
+   `vk_rasterizer.cpp` instead, so installing it doesn't reset players' shader caches.
 
 Azahar only hashes its shader-generator sources when it is configured, and that hash is what makes
 old shader caches regenerate. The `configureAzahar` Gradle task therefore re-runs whenever a patch

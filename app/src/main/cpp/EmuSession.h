@@ -148,6 +148,7 @@ private:
     void RunCommands();
     void Post(std::function<void()> fn, bool wait);
     void SwapCore(std::unique_ptr<EmuCore> next);
+    std::string LoadThreeDs(int fd, const std::string& ext, const std::string& gameKey);
     void RunOneFrame();
     void PresentFrame();
     void UpdateAudioSync(double emulatedFps);
@@ -172,6 +173,10 @@ private:
     std::atomic<bool> running {false};
     std::atomic<bool> paused {true};
     std::atomic<bool> frameStep {false};
+    // Bumped by every load and by Stop, so a 3DS boot finishing on another thread can tell it
+    // was superseded; one 3DS boot at a time.
+    std::atomic<uint64_t> loadGeneration {0};
+    std::mutex threeDsLoadLock;
 
     // The loaded system. Replaced only on the emulation thread, with the audio source detached.
     std::unique_ptr<EmuCore> core;

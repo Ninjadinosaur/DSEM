@@ -1,0 +1,254 @@
+diff --git a/src/citra_libretro/citra_libretro.cpp b/src/citra_libretro/citra_libretro.cpp
+--- a/src/citra_libretro/citra_libretro.cpp
++++ b/src/citra_libretro/citra_libretro.cpp
+@@ -2,8 +2,12 @@
+ // Licensed under GPLv2 or any later version
+ // Refer to the license.txt file included.
+ 
++#include <algorithm>
++#include <array>
++#include <atomic>
+ #include <list>
+ #include <numeric>
++#include <string_view>
+ #include <vector>
+ #include <math.h>
+ #include <stdint.h>
+@@ -19,6 +23,7 @@
+ #include "audio_core/libretro_input.h"
+ #include "audio_core/libretro_sink.h"
+ #include "video_core/gpu.h"
++#include "video_core/rasterizer_interface.h"
+ #ifdef ENABLE_OPENGL
+ #include "video_core/renderer_opengl/renderer_opengl.h"
+ #endif
+@@ -67,6 +72,44 @@
+ 
+ CitraLibRetro* emu_instance;
+ 
++// Shader cache build progress during game load, for the frontend's loading screen (it polls from
++// another thread). Phase: -1 none, 0 vertex shaders, 1 fragment shaders, 2 geometry shaders,
++// 3 pipelines queued, 4 pipelines compiled (the slow part without a driver pipeline cache).
++static std::atomic<int> disk_load_phase{-1};
++static std::atomic<unsigned> disk_load_done{0};
++static std::atomic<unsigned> disk_load_total{0};
++
++static void RecordDiskLoadProgress(VideoCore::LoadCallbackStage stage, std::size_t done,
++                                   std::size_t total, const std::string& name) {
++    if (stage != VideoCore::LoadCallbackStage::Build) {
++        return;
++    }
++    static constexpr std::array<std::string_view, 5> phases{
++        "Vertex Shader", "Fragment Shader", "Geometry Shader", "Pipeline", "Pipeline Compile"};
++    const auto it = std::find(phases.begin(), phases.end(), name);
++    if (it == phases.end()) {
++        return;
++    }
++    disk_load_done = static_cast<unsigned>(done);
++    disk_load_total = static_cast<unsigned>(total);
++    disk_load_phase = static_cast<int>(it - phases.begin());
++}
++
++extern "C" RETRO_API void ds13r_get_load_progress(int* phase, unsigned* done, unsigned* total) {
++    *phase = disk_load_phase;
++    *done = disk_load_done;
++    *total = disk_load_total;
++}
++
++// Saves shader/pipeline caches built since the last save. Call from the thread that runs
++// retro_run, between frames; returns true if anything was written.
++extern "C" RETRO_API bool ds13r_save_disk_resources() {
++    if (!emu_instance || !emu_instance->game_loaded) {
++        return false;
++    }
++    return Core::System::GetInstance().GPU().Renderer().Rasterizer()->SaveDiskResources();
++}
++
+ void retro_init() {
+     emu_instance = new CitraLibRetro();
+     Common::Log::LibRetroStart(LibRetro::GetLoggingBackend());
+@@ -410,7 +453,8 @@
+ 
+     if (Settings::values.use_disk_shader_cache) {
+         Core::System::GetInstance().GPU().Renderer().Rasterizer()->LoadDefaultDiskResources(
+-            false, nullptr);
++            false, RecordDiskLoadProgress);
++        disk_load_phase = -1;
+     }
+ 
+     setup_memory_maps();
+diff --git a/src/common/thread_worker.h b/src/common/thread_worker.h
+--- a/src/common/thread_worker.h
++++ b/src/common/thread_worker.h
+@@ -106,6 +106,14 @@
+         return threads.size();
+     }
+ 
++    /// Work items queued and finished so far (for progress reporting).
++    std::size_t WorkScheduled() const noexcept {
++        return work_scheduled;
++    }
++    std::size_t WorkDone() const noexcept {
++        return work_done;
++    }
++
+ private:
+     std::queue<Task> requests;
+     std::mutex queue_mutex;
+diff --git a/src/video_core/rasterizer_interface.h b/src/video_core/rasterizer_interface.h
+--- a/src/video_core/rasterizer_interface.h
++++ b/src/video_core/rasterizer_interface.h
+@@ -80,6 +80,12 @@
+         [[maybe_unused]] const std::atomic_bool& stop_loading,
+         [[maybe_unused]] const DiskResourceLoadCallback& callback) {}
+ 
++    /// Writes disk resources built since the last save (e.g. the driver pipeline cache).
++    /// Returns true if anything was written.
++    virtual bool SaveDiskResources() {
++        return false;
++    }
++
+     virtual void SwitchDiskResources([[maybe_unused]] u64 title_id) {}
+ 
+     static void SetSwitchDiskResourcesCallback(const DiskResourceLoadCallback& callback) {
+diff --git a/src/video_core/renderer_vulkan/vk_rasterizer.cpp b/src/video_core/renderer_vulkan/vk_rasterizer.cpp
+--- a/src/video_core/renderer_vulkan/vk_rasterizer.cpp
++++ b/src/video_core/renderer_vulkan/vk_rasterizer.cpp
+@@ -2,7 +2,13 @@
+ // Licensed under GPLv2 or any later version
+ // Refer to the license.txt file included.
+ 
++#include <algorithm>
++#include <chrono>
++#include <thread>
++
+ #include "common/alignment.h"
++#include "common/common_paths.h"
++#include "common/file_util.h"
+ #include "common/literals.h"
+ #include "common/logging/log.h"
+ #include "common/math_util.h"
+@@ -36,6 +42,36 @@
+ constexpr u64 UNIFORM_BUFFER_SIZE = 8_MiB;
+ constexpr u64 TEXTURE_BUFFER_SIZE = 2_MiB;
+ 
++// PipelineCache writes the driver pipeline cache to disk only when it is destroyed, so a frontend
++// that is killed in the background loses everything built since launch. Its header feeds the
++// shader cache version hash (changing it would discard every game's shader list), so the private
++// cache handle is reached through the explicit-instantiation access rule instead.
++struct DriverPipelineCacheTag {
++    using Type = vk::UniquePipelineCache PipelineCache::*;
++    friend Type Get(DriverPipelineCacheTag);
++};
++template <typename Tag, typename Tag::Type Member>
++struct PrivateMember {
++    friend typename Tag::Type Get(Tag) {
++        return Member;
++    }
++};
++template struct PrivateMember<DriverPipelineCacheTag, &PipelineCache::driver_pipeline_cache>;
++
++// The disk shader cache only queues its pipelines on these workers (see LoadDefaultDiskResources).
++struct PipelineWorkersTag {
++    using Type = Common::ThreadWorker PipelineCache::*;
++    friend Type Get(PipelineWorkersTag);
++};
++template struct PrivateMember<PipelineWorkersTag, &PipelineCache::pipeline_workers>;
++
++// Same file name PipelineCache uses for this title and GPU.
++std::string DriverPipelineCachePath(const Instance& instance, u64 program_id) {
++    return fmt::format("{}vulkan{}pipeline{}{:016X}-{:X}{:X}.bin",
++                       FileUtil::GetUserPath(FileUtil::UserPath::ShaderDir), DIR_SEP, DIR_SEP,
++                       program_id, instance.GetVendorID(), instance.GetDeviceID());
++}
++
+ constexpr vk::BufferUsageFlags BUFFER_USAGE =
+     vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eIndexBuffer;
+ 
+@@ -159,13 +195,67 @@
+ 
+     pipeline_cache.SetProgramID(program_id);
+     pipeline_cache.SetAccurateMul(accurate_mul);
++    Common::ThreadWorker& workers = pipeline_cache.*Get(PipelineWorkersTag{});
++    const std::size_t scheduled_before = workers.WorkScheduled();
++    const std::size_t done_before = workers.WorkDone();
+     pipeline_cache.LoadCache(stop_loading, callback);
+ 
++    // The disk cache queues its pipelines on worker threads and returns straight away. Without a
++    // driver pipeline cache compiling them takes minutes, and the first thing that waits for the
++    // workers (a state load restarting the system, or the first draws) stalls with no feedback.
++    // Wait here instead, reporting progress, while the frontend can show a loading screen.
++    for (;;) {
++        const std::size_t total = workers.WorkScheduled() - scheduled_before;
++        const std::size_t done = std::min(workers.WorkDone() - done_before, total);
++        if (callback) {
++            callback(VideoCore::LoadCallbackStage::Build, done, total, "Pipeline Compile");
++        }
++        if (done >= total || stop_loading) {
++            break;
++        }
++        std::this_thread::sleep_for(std::chrono::milliseconds(50));
++    }
++    // What is on disk now; anything the driver cache grows beyond this is unsaved.
++    const std::string saved_path =
++        DriverPipelineCachePath(instance, pipeline_cache.GetProgramID());
++    saved_pipeline_cache_size = FileUtil::Exists(saved_path) ? FileUtil::GetSize(saved_path) : 0;
++
+     if (callback) {
+         callback(VideoCore::LoadCallbackStage::Complete, 0, 0, "");
+     }
+ }
+ 
++bool RasterizerVulkan::SaveDiskResources() {
++    const vk::UniquePipelineCache& cache = pipeline_cache.*Get(DriverPipelineCacheTag{});
++    if (!Settings::values.use_disk_shader_cache || !cache) {
++        return false;
++    }
++    const vk::Device device = instance.GetDevice();
++    std::size_t size = 0;
++    if (device.getPipelineCacheData(*cache, &size, nullptr) != vk::Result::eSuccess ||
++        size == saved_pipeline_cache_size) {
++        return false;
++    }
++    const std::vector<u8> data = device.getPipelineCacheData(*cache);
++
++    // Write beside the old file and swap it in, so a kill mid-write keeps the previous cache.
++    const std::string path = DriverPipelineCachePath(instance, pipeline_cache.GetProgramID());
++    const std::string temp = path + ".tmp";
++    {
++        FileUtil::IOFile file{temp, "wb"};
++        if (!file.IsOpen() || file.WriteBytes(data.data(), data.size()) != data.size()) {
++            LOG_ERROR(Render_Vulkan, "Error writing pipeline cache {}", temp);
++            return false;
++        }
++    }
++    if (!FileUtil::Rename(temp, path)) {
++        LOG_ERROR(Render_Vulkan, "Error replacing pipeline cache {}", path);
++        return false;
++    }
++    saved_pipeline_cache_size = data.size();
++    return true;
++}
++
+ void RasterizerVulkan::SyncDrawState() {
+     SyncDrawUniforms();
+ 
+diff --git a/src/video_core/renderer_vulkan/vk_rasterizer.h b/src/video_core/renderer_vulkan/vk_rasterizer.h
+--- a/src/video_core/renderer_vulkan/vk_rasterizer.h
++++ b/src/video_core/renderer_vulkan/vk_rasterizer.h
+@@ -47,6 +47,7 @@
+     void TickFrame();
+     void LoadDefaultDiskResources(const std::atomic_bool& stop_loading,
+                                   const VideoCore::DiskResourceLoadCallback& callback) override;
++    bool SaveDiskResources() override;
+ 
+     void DrawTriangles() override;
+     void FlushAll() override;
+@@ -119,6 +120,7 @@
+     RenderManager& renderpass_cache;
+     DescriptorUpdateQueue& update_queue;
+     PipelineCache pipeline_cache;
++    std::size_t saved_pipeline_cache_size{};
+     TextureRuntime runtime;
+     RasterizerCache res_cache;
+ 

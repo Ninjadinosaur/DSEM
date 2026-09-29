@@ -3,6 +3,7 @@
 #include "EmuCore.h"
 
 #include <GLES3/gl32.h>
+#include <chrono>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -24,9 +25,14 @@ public:
     explicit ThreeDsCore(CoreHost& host);
     ~ThreeDsCore() override;
 
-    // Takes its own duplicate of `fd` (kept open while the game runs: the engine streams the
-    // file rather than reading it whole). `extension` is e.g. ".3ds". Returns "" or a message.
-    std::string LoadGame(int fd, const std::string& extension, const std::string& gameKey);
+    // Loading is two steps. Prepare (emulation thread) takes its own duplicate of `fd` (kept open
+    // while the game runs: the engine streams the file rather than reading it whole), loads the
+    // engine and picks the renderer; `extension` is e.g. ".3ds". Boot then starts the game, which
+    // can take minutes while the engine builds its shader cache. On Vulkan, Boot may run on any
+    // thread; OpenGL ES needs the emulation thread's context. Both return "" or a message.
+    std::string Prepare(int fd, const std::string& extension);
+    std::string Boot(const std::string& gameKey);
+    bool BootsOffThread() const { return useVulkan; }
 
     const char* SystemName() const override { return "3DS"; }
     double NativeFps() const override { return 59.8261; }
@@ -35,8 +41,9 @@ public:
     bool GetFrame(FrameInfo& out) override;
     void Reset() override;
     void Shutdown() override;
-    void CheckFlush() override {}
-    void FlushSaves() override {}
+    // The engine writes battery saves itself; these keep its GPU shader cache on disk.
+    void CheckFlush() override;
+    void FlushSaves() override;
     bool SaveState(std::vector<uint8_t>& out) override;
     bool LoadState(const uint8_t* data, size_t len) override;
     // A 3DS snapshot includes 128+ MB of RAM: too big for continuous rewind.
@@ -52,6 +59,11 @@ public:
 
     // Size of the composed frame (both screens) the core produces, for the app's layout.
     void FrameSize(int& width, int& height) const { width = frameW; height = frameH; }
+
+    // Shader cache build progress while a game loads; safe from any thread. Phase: -1 none,
+    // 0 vertex shaders, 1 fragment shaders, 2 geometry shaders, 3 pipelines queued,
+    // 4 pipelines compiled.
+    static void LoadProgress(int& phase, unsigned& done, unsigned& total);
 
     // ---- libretro callbacks (static trampolines forward here) ----
     bool Environment(unsigned cmd, void* data);
@@ -75,6 +87,7 @@ private:
     void DestroyFramebuffer();
     void CopyToPresenterTexture(unsigned width, unsigned height);
     void ForgetVulkanImage();
+    void SaveShaderCache();
     std::string OptionOverride(const std::string& key) const;
 
     CoreHost& host;
@@ -84,6 +97,7 @@ private:
     std::string lastMessage;
     int romFd = -1;
     std::string romLink;
+    std::chrono::steady_clock::time_point nextCacheSave;
 
     // Core options: defaults declared by the core, values possibly overridden by us.
     std::map<std::string, std::string> options;

@@ -11,6 +11,7 @@
 
 #include <EGL/egl.h>
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdarg>
 #include <cstring>
@@ -54,6 +55,8 @@ struct LibretroApi
     RETRO_FN(void, retro_unload_game, (void))
     RETRO_FN(void, retro_cheat_reset, (void))
     RETRO_FN(void, retro_cheat_set, (unsigned, bool, const char*))
+    // Our additions (patch 0007).
+    RETRO_FN(bool, ds13r_save_disk_resources, (void))
 #undef RETRO_FN
 };
 
@@ -310,6 +313,15 @@ retro_vfs_interface gVfs = {
 
 constexpr size_t kRingFrames = 16384;
 constexpr double kOutputRate = 48000.0;
+
+// The engine keeps the GPU driver's compiled shaders (its pipeline cache) in memory and writes
+// them to disk only on a clean shutdown; without that file the next launch rebuilds every shader
+// the game has used (about 2 minutes of black screen for Pokemon X on the 13R). So it is also
+// saved when the app leaves the foreground and, if anything new was built, this often in play.
+constexpr auto kCacheSaveInterval = std::chrono::minutes(2);
+
+// Resolved once; the library is never unloaded, so the UI thread can call it during a load.
+std::atomic<void (*)(int*, unsigned*, unsigned*)> gLoadProgress {nullptr};
 }
 
 ThreeDsCore::ThreeDsCore(CoreHost& h)
@@ -346,10 +358,14 @@ bool ThreeDsCore::LoadLibrary()
     RESOLVE(retro_run) RESOLVE(retro_serialize_size) RESOLVE(retro_serialize) RESOLVE(retro_unserialize)
     RESOLVE(retro_load_game) RESOLVE(retro_unload_game) RESOLVE(retro_cheat_reset) RESOLVE(retro_cheat_set)
 #undef RESOLVE
+    api->ds13r_save_disk_resources =
+        reinterpret_cast<decltype(api->ds13r_save_disk_resources)>(dlsym(api->handle, "ds13r_save_disk_resources"));
+    gLoadProgress = reinterpret_cast<void (*)(int*, unsigned*, unsigned*)>(dlsym(api->handle, "ds13r_get_load_progress"));
+    if (!api->ds13r_save_disk_resources || !gLoadProgress) LOGW("3DS: engine lacks shader cache saving/progress");
     return ok;
 }
 
-std::string ThreeDsCore::LoadGame(int fd, const std::string& extension, const std::string& gameKey)
+std::string ThreeDsCore::Prepare(int fd, const std::string& extension)
 {
     // The engine opens the game by path. Give it a named link to our open file descriptor, so
     // games picked through Android's document system (no real path) work, extension included.
@@ -363,7 +379,6 @@ std::string ThreeDsCore::LoadGame(int fd, const std::string& extension, const st
         LOGW("3DS: symlink failed (%s), using the descriptor path", strerror(errno));
         romLink = target;
     }
-    const std::string& path = romLink;
 
     if (!LoadLibrary()) return "The 3DS engine could not be loaded.";
     gActive = this;
@@ -385,7 +400,11 @@ std::string ThreeDsCore::LoadGame(int fd, const std::string& extension, const st
         }
     }
     LOGI("3DS renderer: %s", useVulkan ? "Vulkan" : "OpenGL ES");
+    return {};
+}
 
+std::string ThreeDsCore::Boot(const std::string& gameKey)
+{
     api->retro_set_environment(EnvTrampoline);
     api->retro_set_video_refresh(VideoTrampoline);
     api->retro_set_audio_sample(AudioSampleTrampoline);
@@ -395,7 +414,7 @@ std::string ThreeDsCore::LoadGame(int fd, const std::string& extension, const st
     api->retro_init();
 
     retro_game_info info {};
-    info.path = path.c_str();
+    info.path = romLink.c_str();
     if (!api->retro_load_game(&info))
     {
         std::string msg = lastMessage.empty() ? "This 3DS game could not be loaded." : lastMessage;
@@ -413,7 +432,8 @@ std::string ThreeDsCore::LoadGame(int fd, const std::string& extension, const st
     {
         if (!useVulkan)
         {
-            // Our GL context is current on this (the emulation) thread; the core draws into our FBO.
+            // Our GL context is current on the emulation thread (see BootsOffThread); the core
+            // draws into our FBO.
             if (host.Presenter()) host.Presenter()->MakeCurrent();
             CreateFramebuffer((int)av.geometry.max_width, (int)av.geometry.max_height);
         }
@@ -431,6 +451,7 @@ std::string ThreeDsCore::LoadGame(int fd, const std::string& extension, const st
     }
 
     gameLoaded = true;
+    nextCacheSave = std::chrono::steady_clock::now() + kCacheSaveInterval;
     LOGI("3DS: loaded %s (%dx%d frame, max %ux%u, audio %.0f Hz)", gameKey.c_str(), frameW, frameH,
          av.geometry.max_width, av.geometry.max_height, coreSampleRate);
     return {};
@@ -903,6 +924,39 @@ void ThreeDsCore::Reset()
     gActive = this;
     api->retro_reset();
     ForgetVulkanImage();
+}
+
+void ThreeDsCore::CheckFlush()
+{
+    if (!gameLoaded) return;
+    auto now = std::chrono::steady_clock::now();
+    if (now < nextCacheSave) return;
+    nextCacheSave = now + kCacheSaveInterval;
+    SaveShaderCache();
+}
+
+void ThreeDsCore::FlushSaves()
+{
+    // Leaving the foreground: OxygenOS may now kill the app without a clean shutdown.
+    if (gameLoaded) SaveShaderCache();
+}
+
+void ThreeDsCore::SaveShaderCache()
+{
+    if (!api->ds13r_save_disk_resources) return;
+    auto start = std::chrono::steady_clock::now();
+    if (api->ds13r_save_disk_resources())
+    {
+        auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        LOGI("3DS: saved shader cache (%.0f ms)", ms);
+    }
+}
+
+void ThreeDsCore::LoadProgress(int& phase, unsigned& done, unsigned& total)
+{
+    phase = -1;
+    done = total = 0;
+    if (auto fn = gLoadProgress.load()) fn(&phase, &done, &total);
 }
 
 // Azahar restarts its whole system (renderer included) on a state load or reset, destroying the

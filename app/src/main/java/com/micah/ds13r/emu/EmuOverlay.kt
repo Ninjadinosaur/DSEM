@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -41,6 +42,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -64,6 +66,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -88,12 +91,18 @@ class EmuUiState {
     val lastSavedSlot = mutableIntStateOf(-1)
     val controllerConnected = mutableStateOf(false)
     val lidClosed = mutableStateOf(false)
+    val loading = mutableStateOf<LoadingProgress?>(null)
 }
+
+/** A slow game load: overall [fraction] 0..1, what is happening, and whether to explain why. */
+data class LoadingProgress(val fraction: Float, val step: String, val explain: Boolean)
 
 @Composable
 fun EmuOverlay(ui: EmuUiState, activity: EmulationActivity) {
     Box(Modifier.fillMaxSize()) {
         if (ui.showStats.value) StatsOverlay(ui.stats.value, Modifier.align(Alignment.TopStart).safeDrawingPadding().padding(8.dp))
+
+        ui.loading.value?.let { LoadingScreen(ui.title.value, it) }
 
         if (ui.menuOpen.value) InGameMenu(ui, activity)
 
@@ -118,6 +127,40 @@ fun EmuOverlay(ui: EmuUiState, activity: EmulationActivity) {
                 confirmButton = { TextButton(onClick = { activity.quit() }) { Text("Back to library") } },
                 title = { Text("Can't continue") },
                 text = { Text(err) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun LoadingScreen(title: String, progress: LoadingProgress) {
+    // One bar for the whole load, with the current step named (long waits need both).
+    Column(
+        Modifier.fillMaxSize().background(Color.Black).safeDrawingPadding().padding(horizontal = 40.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(title, color = Color.White, style = MaterialTheme.typography.headlineSmall)
+        Spacer(Modifier.height(32.dp))
+        Text("Preparing graphics…", color = Color.White, style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(12.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            LinearProgressIndicator(progress = { progress.fraction }, modifier = Modifier.weight(1f))
+            Text(
+                "%d%%".format((progress.fraction * 100).toInt()),
+                color = Color.White,
+                modifier = Modifier.padding(start = 12.dp).widthIn(min = 40.dp),
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(progress.step, color = Color(0xFFBBBBBB), style = MaterialTheme.typography.bodyMedium)
+        if (progress.explain) {
+            Spacer(Modifier.height(32.dp))
+            Text(
+                "This happens once after an app update or an unexpected close.",
+                color = Color(0xFFBBBBBB),
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center,
             )
         }
     }

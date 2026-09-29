@@ -56,6 +56,12 @@ object NativeBridge {
     @JvmStatic external fun nativeLoadGame(fd: Int, fileName: String, gameKey: String): String?
     @JvmStatic external fun nativeBootFirmware(): String?
     @JvmStatic external fun nativeLoadGbaRom(fd: Int, fileName: String): String?
+    /**
+     * While a 3DS game loads: [phase, done, total] of the shader cache build. Phase -1 none,
+     * 0 vertex shaders, 1 fragment shaders, 2 geometry shaders, 3 pipelines queued,
+     * 4 pipelines compiled. Any thread.
+     */
+    @JvmStatic external fun nativeGet3dsLoadProgress(): IntArray
 
     @JvmStatic external fun nativeStart()
     @JvmStatic external fun nativeSetPaused(paused: Boolean)

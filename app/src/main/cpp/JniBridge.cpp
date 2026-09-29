@@ -2,6 +2,7 @@
 
 #include "EmuSession.h"
 #include "LogBuffer.h"
+#include "ThreeDsCore.h"
 
 #include <android/native_window_jni.h>
 #include <jni.h>
@@ -186,6 +187,18 @@ JNI_FN(jintArray, nativeGet3dsFrameSize)(JNIEnv* env, jclass)
     if (!S().ThreeDsFrameSize(size[0], size[1])) return nullptr;
     jintArray out = env->NewIntArray(2);
     env->SetIntArrayRegion(out, 0, 2, size);
+    return out;
+}
+
+JNI_FN(jintArray, nativeGet3dsLoadProgress)(JNIEnv* env, jclass)
+{
+    // Called by the UI while nativeLoadGame blocks the emulation thread, so it bypasses the session.
+    int phase;
+    unsigned done, total;
+    ds13r::ThreeDsCore::LoadProgress(phase, done, total);
+    int values[3] = {phase, (int)done, (int)total};
+    jintArray out = env->NewIntArray(3);
+    env->SetIntArrayRegion(out, 0, 3, values);
     return out;
 }
 
